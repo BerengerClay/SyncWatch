@@ -1,12 +1,13 @@
 import React, { useState, useCallback } from 'react';
 import { VideoView } from './VideoView';
-import { Crown, Play, Pause, LogOut, Radio } from 'lucide-react';
+import { Crown, Play, Pause, LogOut, Radio, Square } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
 interface Props {
   roomId: string;
   isHost: boolean;
   onLeave: () => void;
+  onStop: () => void;
 }
 
 const formatTime = (seconds: number): string => {
@@ -17,7 +18,7 @@ const formatTime = (seconds: number): string => {
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 };
 
-export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave }) => {
+export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave, onStop }) => {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -80,6 +81,13 @@ export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave }) => {
           <span className="font-black text-xs tracking-[0.2em] text-white/90">SYNCWATCH</span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={onStop}
+            className="flex items-center gap-1.5 bg-white/5 hover:bg-indigo-500/20 text-slate-400 hover:text-indigo-400 px-3 py-1.5 rounded-full border border-white/5 hover:border-indigo-500/20 text-[9px] font-black uppercase tracking-widest transition-all duration-300 active:scale-95"
+          >
+            <Square size={10} />
+            STOP
+          </button>
           {isHost && (
             <span className="flex items-center gap-1.5 bg-amber-500/10 text-amber-400 px-2.5 py-1 rounded-full border border-amber-500/20 text-[9px] font-black uppercase tracking-widest">
               <Crown size={10} /> HOST

@@ -10,70 +10,117 @@ const WIN_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.
 const SIDEBAR_WIDTH: f64 = 350.0;
 const DEV_URL: &str = "http://localhost:1420";
 
-const PLAYER_BRIDGE_SCRIPT: &str = r#"
+const CORE_BRIDGE_SCRIPT: &str = r#"
     (function() {
-        console.log('[SyncWatch] Core API Bridge Active');
+        if (window.__SYNCWATCH_INJECTED__) return;
+        window.__SYNCWATCH_INJECTED__ = true;
+
+        console.log('[SyncWatch] Core Bridge Active on', window.location.hostname);
         window.navigator.managed = { enabled: false };
 
-        function sendToRust(cmd, args) {
-            // Méthode officielle Tauri 2.0 : Utilise l'API interne si elle est injectée
-            if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
-                window.__TAURI_INTERNALS__.invoke(cmd, args).catch(() => {});
-            } 
-            // Fallback robuste : si l'API n'est pas prête mais que la Capability a fourni la clé secrète
-            else if (window.ipc && window.__TAURI_INVOKE_KEY__) {
-                window.ipc.postMessage(JSON.stringify({
-                    cmd: cmd,
-                    callback: Math.floor(Math.random() * 1000000),
-                    error: Math.floor(Math.random() * 1000000),
-                    __TAURI_INVOKE_KEY__: window.__TAURI_INVOKE_KEY__,
-                    ...args
-                }));
-            }
-        }
+        const plugin = window.SW_PLUGIN || {
+            getVideo: () => document.querySelector('video'),
+            getIframe: () => null, // Par défaut, pas d'iframe spécifique
+            play: (v) => v && v.play().catch(() => {}),
+            pause: (v) => v && v.pause(),
+            seek: (v, t) => { if (v) v.currentTime = t; }
+        };
 
         setInterval(() => {
-            const v = document.querySelector('video');
-            if (v && !isNaN(v.duration) && v.duration > 0) {
-                sendToRust('playback_report', {
-                    t: v.currentTime,
-                    d: v.duration,
-                    p: v.paused ? 1 : 0
-                });
+            const v = plugin.getVideo();
+            if (v && v.tagName === 'VIDEO' && !isNaN(v.duration) && v.duration > 0) {
+                const payload = { t: v.currentTime, d: v.duration, p: v.paused ? 1 : 0 };
+                if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                    window.__TAURI_INTERNALS__.invoke('playback_report', payload).catch(() => {});
+                } else if (window.ipc && window.__TAURI_INVOKE_KEY__) {
+                    window.ipc.postMessage(JSON.stringify({
+                        cmd: 'playback_report', ...payload, callback: 0, error: 0,
+                        __TAURI_INVOKE_KEY__: window.__TAURI_INVOKE_KEY__
+                    }));
+                }
             }
         }, 500);
 
         window.syncWatchControl = function(cmd, data) {
-            const v = document.querySelector('video');
-            if (!v) return;
-            if (cmd === 'play') v.play().catch(() => {});
-            if (cmd === 'pause') v.pause();
-            if (cmd === 'seek') v.currentTime = data;
+            const v = plugin.getVideo();
+            
+            if (v && v.tagName === 'VIDEO') {
+                console.log('[SyncWatch] 🎬 Ordre', cmd, 'appliqué');
+                if (cmd === 'play') plugin.play(v);
+                if (cmd === 'pause') plugin.pause(v);
+                if (cmd === 'seek') plugin.seek(v, data);
+            } else {
+                // CIBLAGE CHIRURGICAL : On demande au plugin s'il connait l'iframe cible
+                const frame = plugin.getIframe ? plugin.getIframe() : null;
+                if (frame && frame.contentWindow) {
+                    console.log('[SyncWatch] 📡 Relais de l\'ordre à l\'iframe cible...');
+                    frame.contentWindow.postMessage({ type: 'SYNCWATCH_CMD', cmd: cmd, data: data }, '*');
+                }
+            }
         };
+
+        window.addEventListener('message', (event) => {
+            if (event.data && event.data.type === 'SYNCWATCH_CMD') {
+                window.syncWatchControl(event.data.cmd, event.data.data);
+            }
+        });
     })();
 "#;
+
+fn get_plugin_script_for_url(url: &str) -> String {
+    if url.contains("tf1.fr") {
+        r#"
+        window.SW_PLUGIN = {
+            name: 'TF1+ Plugin',
+            getVideo: () => document.querySelector('#ntrs-video-media'),
+            getIframe: () => document.querySelector('iframe[src*="prod-player.tf1.fr"]'),
+            play: (v) => v && v.play().catch(() => {}),
+            pause: (v) => v && v.pause(),
+            seek: (v, t) => { if (v) v.currentTime = t; }
+        };
+        "#.to_string()
+    } else if url.contains("youtube.com") {
+        r#"
+        window.SW_PLUGIN = {
+            name: 'YouTube Plugin',
+            getVideo: () => document.querySelector('video'),
+            getIframe: () => null,
+            play: (v) => v && v.play().catch(() => {}),
+            pause: (v) => v && v.pause(),
+            seek: (v, t) => { if (v) v.currentTime = t; }
+        };
+        "#.to_string()
+    } else {
+        "".to_string()
+    }
+}
 
 // --- LAYOUT ENGINE ---
 
 fn update_layout(app: &AppHandle) {
     if let Some(window) = app.get_window("main") {
-        if let (Ok(size), Ok(scale)) = (window.inner_size(), window.scale_factor()) {
-            let logical = size.to_logical::<f64>(scale);
-            let player_exists = app.get_webview("player").is_some();
-            let current_sidebar_width = if player_exists { SIDEBAR_WIDTH } else { logical.width };
+        let scale_factor = window.scale_factor().unwrap_or(1.0);
+        let physical = window.inner_size().unwrap();
+        let logical = physical.to_logical::<f64>(scale_factor);
+        let width = logical.width;
+        let height = logical.height;
 
-            if let Some(sidebar) = app.get_webview("sidebar") {
+        if let Some(sidebar) = app.get_webview("sidebar") {
+            if let Some(player) = app.get_webview("player") {
                 let _ = sidebar.set_bounds(tauri::Rect {
                     position: Position::Logical(LogicalPosition::new(0.0, 0.0)),
-                    size: Size::Logical(LogicalSize::new(current_sidebar_width, logical.height)),
+                    size: Size::Logical(LogicalSize::new(SIDEBAR_WIDTH, height)),
                 });
-            }
-
-            if let Some(player) = app.get_webview("player") {
-                let player_width = (logical.width - SIDEBAR_WIDTH).max(0.0);
+                
+                let player_width = (width - SIDEBAR_WIDTH).max(0.0);
                 let _ = player.set_bounds(tauri::Rect {
                     position: Position::Logical(LogicalPosition::new(SIDEBAR_WIDTH, 0.0)),
-                    size: Size::Logical(LogicalSize::new(player_width, logical.height)),
+                    size: Size::Logical(LogicalSize::new(player_width, height)),
+                });
+            } else {
+                let _ = sidebar.set_bounds(tauri::Rect {
+                    position: Position::Logical(LogicalPosition::new(0.0, 0.0)),
+                    size: Size::Logical(LogicalSize::new(width, height)),
                 });
             }
         }
@@ -125,10 +172,21 @@ async fn set_view_mode(
     let native_window = app.get_window("main").ok_or("Main window not found")?;
 
     match mode.as_str() {
-        "HOME" => {
+        "HOME" | "GROUP" => {
             if let Some(player) = app.get_webview("player") {
                 let _ = player.close();
-                update_layout(&app);
+            }
+            // On force un petit délai ou on appelle update_layout avec la certitude que player n'est plus là.
+            // En fait, update_layout vérifie Some(player), donc on peut forcer le layout plein écran ici.
+            if let Some(sidebar) = app.get_webview("sidebar") {
+                let scale_factor = native_window.scale_factor().unwrap_or(1.0);
+                let physical = native_window.inner_size().unwrap();
+                let logical = physical.to_logical::<f64>(scale_factor);
+                
+                let _ = sidebar.set_bounds(tauri::Rect {
+                    position: Position::Logical(LogicalPosition::new(0.0, 0.0)),
+                    size: Size::Logical(LogicalSize::new(logical.width, logical.height)),
+                });
             }
         }
         "WATCH" => {
@@ -139,9 +197,12 @@ async fn set_view_mode(
             } else if let Some(target_url) = url {
                 let parsed: Url = target_url.parse().map_err(|e: url::ParseError| e.to_string())?;
                 
-                // Finie la fausse ligne directe ! On construit un lecteur parfaitement standard.
+                // On assemble le plugin spécifique et le moteur de base
+                let plugin_script = get_plugin_script_for_url(&target_url);
+                let full_script = format!("{}\n{}", plugin_script, CORE_BRIDGE_SCRIPT);
+
                 let builder = WebviewBuilder::new("player", WebviewUrl::External(parsed))
-                    .initialization_script(PLAYER_BRIDGE_SCRIPT);
+                    .initialization_script(&full_script);
 
                 let _player = native_window
                     .add_child(builder, Position::Logical(LogicalPosition::new(SIDEBAR_WIDTH, 0.0)), Size::Logical(LogicalSize::new(100.0, 100.0)))

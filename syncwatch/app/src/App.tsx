@@ -56,6 +56,11 @@ function App() {
     setState('WATCH');
   };
 
+  const handleStopWatching = () => {
+    setState('GROUP');
+    invoke('set_view_mode', { mode: 'GROUP' });
+  };
+
   const handleLeave = () => {
     setState('HOME');
     setRoomId('');
@@ -82,6 +87,7 @@ function App() {
            roomId={roomId} 
            isHost={isHost} 
            onLeave={handleLeave}
+           onStop={handleStopWatching}
         />
       )}
     </div>
