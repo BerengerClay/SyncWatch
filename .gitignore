@@ -1,0 +1,46 @@
+# Node.js
+**/node_modules/
+**/dist/
+**/dist-ssr/
+**/.vite/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Tauri & Rust
+**/target/
+**/gen/
+**/*.txt
+!**/tauri.conf.json
+!**/Cargo.toml
+!**/src/**
+
+# IDE & OS
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project-specific logs/temp
+temp/
+*error*.txt
+output.txt
+last_error.txt
+rust_err.txt
+rust_errors.txt
+
+# Environment
+.env
+.env.*
+!.env.example
+
+catrip-player/
+watch-party/

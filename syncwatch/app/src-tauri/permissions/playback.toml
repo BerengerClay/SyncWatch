@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-playback-commands"
+description = "Permet de rapporter et contrôler la lecture de SyncWatch."
+commands.allow = [
+    "playback_report",
+    "playback_control",
+    "set_view_mode",
+    "heartbeat"
+]
