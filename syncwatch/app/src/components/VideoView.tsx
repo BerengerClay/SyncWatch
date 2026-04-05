@@ -6,12 +6,10 @@ import { invoke } from '@tauri-apps/api/core';
 interface Props {
   roomId: string;
   isHost: boolean;
-  onTimeUpdate: (time: number) => void;
-  onDurationUpdate: (duration: number) => void;
-  onPlayStateChange: (playing: boolean) => void;
+  onUpdate: (payload: any) => void;
 }
 
-export const VideoView: React.FC<Props> = ({ onTimeUpdate, onDurationUpdate, onPlayStateChange }) => {
+export const VideoView: React.FC<Props> = ({ onUpdate }) => {
   
   useEffect(() => {
     // 1. Écouter les mises à jour en TEMPS RÉEL venant du lecteur natif (via Rust IPC)
@@ -19,22 +17,12 @@ export const VideoView: React.FC<Props> = ({ onTimeUpdate, onDurationUpdate, onP
     
     const setupTauriListener = async () => {
       try {
-        const unlisten = await listen('player-update', (event: { payload: any }) => {
-          const payload = event.payload;
-          if (!payload) {
-            console.warn('[SyncWatch-React] Received empty payload');
-            return;
+        console.log('[VideoView] 👂 Démarrage de l\'écouteur Tauri (player-update)...');
+        const unlisten = await listen('player-update', (event: any) => {
+          console.log('[VideoView] 🚀 Événement reçu:', event.event, event.payload);
+          if (event.payload) {
+            onUpdate(event.payload);
           }
-
-          console.log('[SyncWatch-React] Data Received:', payload);
-
-          const t = typeof payload.t === 'number' ? payload.t : 0;
-          const d = typeof payload.d === 'number' ? payload.d : 0;
-          const p = typeof payload.p === 'number' ? payload.p : 1;
-
-          onTimeUpdate(t);
-          onDurationUpdate(d);
-          onPlayStateChange(p === 0);
         });
         unlistenTauri = unlisten;
       } catch (err) {
@@ -63,7 +51,7 @@ export const VideoView: React.FC<Props> = ({ onTimeUpdate, onDurationUpdate, onP
         if (unlistenTauri) unlistenTauri();
         if (typeof unlistenSocket === 'function') unlistenSocket();
     };
-  }, [onTimeUpdate, onDurationUpdate, onPlayStateChange]);
+  }, [onUpdate]);
 
   return null; 
 };

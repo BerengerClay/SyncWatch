@@ -1,0 +1,17 @@
+[
+  {
+    "name": "YouTube",
+    "url_pattern": "https://www.youtube.com",
+    "script_filename": "youtube.js"
+  },
+  {
+    "name": "TF1+",
+    "url_pattern": "tf1.fr",
+    "script_filename": "tf1.js"
+  },
+  {
+    "name": "Deezer",
+    "url_pattern": "deezer.com",
+    "script_filename": "deezer.js"
+  }
+]
