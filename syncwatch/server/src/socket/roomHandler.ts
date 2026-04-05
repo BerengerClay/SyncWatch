@@ -45,27 +45,12 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
         }
     });
 
-    // --- Événements de Synchronisation ---
-    // On relaie les événements du "Host" vers tous les autres membres
-
-    socket.on('SYNC_PLAY', ({ roomId, currentTime }: { roomId: string, currentTime: number }) => {
-        const room = rooms.get(roomId);
-        if (room && room.hostId === socket.id) {
-            socket.to(roomId).emit('SYNC_PLAY', { currentTime });
-        }
-    });
-
-    socket.on('SYNC_PAUSE', ({ roomId, currentTime }: { roomId: string, currentTime: number }) => {
-        const room = rooms.get(roomId);
-        if (room && room.hostId === socket.id) {
-            socket.to(roomId).emit('SYNC_PAUSE', { currentTime });
-        }
-    });
-
-    socket.on('SYNC_SEEK', ({ roomId, currentTime }: { roomId: string, currentTime: number }) => {
-        const room = rooms.get(roomId);
-        if (room && room.hostId === socket.id) {
-            socket.to(roomId).emit('SYNC_SEEK', { currentTime });
+    // --- Synchronisation Agnostique (State Streaming) ---
+    socket.on('BROADCAST_STATE', (fullState: any) => {
+        const roomId = Array.from(socket.rooms).find(r => r !== socket.id);
+        if (roomId) {
+            // Relay to everyone else in the room
+            socket.to(roomId).emit('SYNC_STATE', fullState);
         }
     });
 
