@@ -13,7 +13,7 @@ interface Props {
 }
 
 export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave, onStop }) => {
-  const [mediaState, setMediaState] = useState({ time: 0, duration: 0, paused: true, title: 'Vidéo inconnue' });
+  const [mediaState, setMediaState] = useState<any>({});
   const [featuresState, setFeaturesState] = useState<any>({});
   
   const [IdleUI, setIdleUI] = useState<React.FC<any> | null>(null);

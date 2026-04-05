@@ -19,5 +19,12 @@
     "script_filename": "deezer.js",
     "homepage": "https://www.deezer.com",
     "color": "bg-[#A238FF]/10 hover:bg-[#A238FF]/20 border-[#A238FF]/30 text-[#A238FF]"
+  },
+  {
+    "name": "Canal+",
+    "url_pattern": "canalplus.com",
+    "script_filename": "canal.js",
+    "homepage": "https://www.canalplus.com",
+    "color": "bg-white/5 hover:bg-white/10 border-white/20 text-white"
   }
 ]

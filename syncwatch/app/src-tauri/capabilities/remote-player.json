@@ -1,28 +1,37 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
+  "description": "Généré automatiquement par build.rs depuis plugins.json",
   "identifier": "remote-player-access",
-  "description": "Autorise YouTube et TF1+ à envoyer des rapports de lecture via l'IPC natif.",
-  "windows": ["main", "popup-*"],
-  "webviews": ["player", "popup-*"],
-  "remote": {
-    "urls": [
-      "https://youtube.com",
-      "https://*.youtube.com",
-      "https://*.googlevideo.com",
-      "https://*.tf1.fr",
-      "https://deezer.com",
-      "https://*.deezer.com",
-      "https://*.google.com",
-      "https://*.accounts.google.com",
-      "https://*.facebook.com",
-      "https://*.apple.com"
-    ]
-  },
   "permissions": [
     "core:default",
     "core:webview:allow-internal-toggle-devtools",
     "core:event:allow-emit",
     "core:event:allow-listen",
     "allow-playback-commands"
+  ],
+  "remote": {
+    "urls": [
+      "https://*.accounts.google.com",
+      "https://*.apple.com",
+      "https://*.canalplus.com",
+      "https://*.deezer.com",
+      "https://*.facebook.com",
+      "https://*.google.com",
+      "https://*.tf1.fr",
+      "https://*.youtube.com",
+      "https://canalplus.com",
+      "https://deezer.com",
+      "https://tf1.fr",
+      "https://youtube.com"
+    ]
+  },
+  "webviews": [
+    "player",
+    "popup-*"
+  ],
+  "windows": [
+    "main",
+    "player",
+    "popup-*"
   ]
 }
