@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { listenToServer } from '../services/socket';
+import { listenToServer, socket } from '../services/socket';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -9,41 +9,41 @@ interface Props {
   onUpdate: (payload: any) => void;
 }
 
-export const VideoView: React.FC<Props> = ({ onUpdate }) => {
-  
+export const VideoView: React.FC<Props> = ({ isHost, onUpdate }) => {
   useEffect(() => {
-    // 1. Écouter les mises à jour en TEMPS RÉEL venant du lecteur natif (via Rust IPC)
+    // 1. SENS SORTANT (Ton Plugin -> Ton React & Tes Amis)
     let unlistenTauri: (() => void) | undefined;
     
     const setupTauriListener = async () => {
       try {
-        console.log('[VideoView] 👂 Démarrage de l\'écouteur Tauri (player-update)...');
-        const unlisten = await listen('player-update', (event: any) => {
-          console.log('[VideoView] 🚀 Événement reçu:', event.event, event.payload);
-          if (event.payload) {
-            onUpdate(event.payload);
+        unlistenTauri = await listen('player-update', (event: any) => {
+          const fullState = event.payload;
+          if (!fullState) return;
+
+          // Si tu es le Host, tu arroses la room avec ton état
+          if (isHost) {
+            socket.emit('BROADCAST_STATE', fullState);
           }
+          
+          // Mise à jour de ta propre UI locale (WatchScreen)
+          onUpdate(fullState);
         });
-        unlistenTauri = unlisten;
       } catch (err) {
-        console.error('[IPC] Failed to setup listener:', err);
+        console.error('[VideoView] Failed to setup listener:', err);
       }
     };
-
     setupTauriListener();
 
-    // 2. Écoute les commandes de synchro venant du serveur Socket
-    const unlistenSocket = listenToServer((payload: any) => {
-      switch (payload.type) {
-        case 'SYNC_PLAY':
-          invoke('playback_control', { command: 'play' });
-          break;
-        case 'SYNC_PAUSE':
-          invoke('playback_control', { command: 'pause' });
-          break;
-        case 'SYNC_SEEK':
-          invoke('playback_control', { command: 'seek', data: payload.currentTime });
-          break;
+    // 2. SENS ENTRANT (Serveur -> Ton Plugin)
+    const unlistenSocket = listenToServer((data: any) => {
+      if (data.type === 'SYNC_STATE') {
+        const fullState = data.payload;
+        // Si tu N'ES PAS le host, tu obéis à l'état reçu des autres
+        if (!isHost && fullState) {
+           invoke('playback_control', { command: 'APPLY_STATE', data: fullState });
+           // On met aussi à jour l'UI React locale pour que le slider bouge
+           onUpdate(fullState);
+        }
       }
     });
 
@@ -51,7 +51,7 @@ export const VideoView: React.FC<Props> = ({ onUpdate }) => {
         if (unlistenTauri) unlistenTauri();
         if (typeof unlistenSocket === 'function') unlistenSocket();
     };
-  }, [onUpdate]);
+  }, [isHost, onUpdate]);
 
   return null; 
 };

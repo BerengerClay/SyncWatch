@@ -1,10 +1,10 @@
 /**
- * SyncWatch - BaseSyncPlugin V6 (Pro Navigation Edition)
+ * SyncWatch - BaseSyncPlugin V8 (Agnostic State Streaming Edition)
  */
 class BaseSyncPlugin {
   constructor() {
     this.name = 'Base Plugin';
-    this.lastState = { t: 0, p: null, d: 0 };
+    this.lastState = { media: null, features: null };
     this.uiSent = false;
     this.videoElement = null;
   }
@@ -23,63 +23,138 @@ class BaseSyncPlugin {
   getContentBottom() { return 'null'; }
   getFooterExtra() { return 'null'; }
 
-  // --- LOGIQUE ---
-  play(v) { if (v) v.play().catch(() => {}); }
-  pause(v) { if (v) v.pause(); }
-  seek(v, t) { if (v) v.currentTime = t; }
+  getBaseState() {
+    const v = this.getVideo();
+    if (!v) return null;
+    return {
+      time: v.currentTime,
+      paused: v.paused,
+      duration: v.duration || 0
+    };
+  }
+
+  getCustomState() { return {}; } // À surcharger dans youtube.js / tf1.js
 
   init() {
-    console.log(`[SyncWatch] 🔌 Moteur ${this.name} initialisé.`);
+    if (window.swInitDone) return;
+    window.swInitDone = true;
+
+    console.log(`[SyncWatch] 🔌 Moteur ${this.name} initialisé (V8).`);
+    
+    // L'écouteur global qui distribue les tiroirs d'état
     window.syncWatchControl = (cmd, data) => {
-        const v = this.getVideo();
-        if (!v) return;
-        if (cmd === 'play') this.play(v);
-        if (cmd === 'pause') this.pause(v);
-        if (cmd === 'seek') this.seek(v, data);
+        if (cmd === 'APPLY_STATE' && data) {
+            if (data.media) this.applyBaseState(data.media);
+            if (data.features) this.applyCustomState(data.features);
+        }
     };
-    this.reportInterval = setInterval(() => this.report(), 400);
+
+    this.reportInterval = setInterval(() => this.report(), 450);
   }
 
   report() {
-    const v = this.getVideo();
-    if (!v) return;
-    const t = v.currentTime;
-    const p = v.paused ? 1 : 0;
-    const d = v.duration;
-    const timeChanged = Math.abs(t - this.lastState.t) > 0.4;
-    const statusChanged = p !== this.lastState.p;
+    const currentBase = this.getBaseState();
 
-    if (!this.uiSent || statusChanged || timeChanged) {
-      const payload = {
-        t: t, d: isNaN(d) ? 0 : d, p: p,
-        sidebarCode: !this.uiSent ? this.getSidebarCode() : null
+    // --- ÉTAT IDLE (NAVIGATION) ---
+    if (!currentBase) {
+      if (this.currentMode !== 'IDLE') {
+          this.currentMode = 'IDLE';
+          this.uiSent = false;
+      }
+      const idlePayload = {
+        mode: 'IDLE',
+        media: null,
+        features: this.getCustomState(),
+        sidebarCode: !this.uiSent ? this.getIdleSidebarCode() : null
       };
+
       if (window.__TAURI_INTERNALS__?.invoke) {
-        window.__TAURI_INTERNALS__.invoke('playback_report', { payload })
-          .then(() => { this.uiSent = true; })
+        window.__TAURI_INTERNALS__.invoke('playback_report', { payload: idlePayload })
+          .then(() => { if (idlePayload.sidebarCode) this.uiSent = true; })
           .catch(() => {});
       }
-      this.lastState = { t, p, d };
+      return;
+    }
+
+    // --- ÉTAT WATCH (LECTURE) ---
+    if (this.currentMode !== 'WATCH') {
+        this.currentMode = 'WATCH';
+        this.uiSent = false;
+    }
+
+    const fullState = {
+      mode: 'WATCH',
+      media: currentBase,
+      features: this.getCustomState(),
+      sidebarCode: !this.uiSent ? this.getSidebarCode() : null
+    };
+
+    // On envoie l'état complet dans le tuyau
+    if (window.__TAURI_INTERNALS__?.invoke) {
+      window.__TAURI_INTERNALS__.invoke('playback_report', { payload: fullState })
+        .then(() => { if (fullState.sidebarCode) this.uiSent = true; })
+        .catch(() => {});
     }
   }
 
-  getSidebarCode() {
-    const classes = this.getContainerClasses();
+  // --- RÉCEPTION DE L'ÉTAT ---
+  applyBaseState(mediaState) {
+    const v = this.getVideo();
+    if (!v) return;
+
+    // Règle de Tolérance : On ne force le temps que si l'écart est > 2 secondes
+    // Cela évite les saccades dues à la latence réseau
+    if (Math.abs(v.currentTime - mediaState.time) > 2) {
+      v.currentTime = mediaState.time;
+    }
+    
+    // Synchronisation de la lecture (Play/Pause)
+    if (v.paused !== mediaState.paused) {
+      mediaState.paused ? v.pause() : v.play().catch(() => {});
+    }
+  }
+
+  applyCustomState(featuresState) {} // Pour les plugins enfants
+
+  // --- INTERFACE ALTERNATIVE (SANS VIDÉO) ---
+  getIdleSidebarCode() {
     const pluginName = this.name;
+    const classes = this.getContainerClasses();
+    return `() => {
+      return React.createElement('div', { 
+        className: 'flex flex-col items-center justify-center w-full h-[85vh] p-10 gap-8 animate-in fade-in duration-1000 ' + '${classes}'
+      }, [
+        React.createElement('div', { className: 'flex items-center gap-3 mb-6' }, [
+            React.createElement('div', { className: 'w-1.5 h-1.5 rounded-full bg-slate-500 animate-pulse' }),
+            React.createElement('span', { className: 'text-[10px] font-black text-white/20 uppercase tracking-[0.4em]' }, "${pluginName}")
+        ]),
+        React.createElement('div', { className: 'flex flex-col items-center gap-4 opacity-50' }, [
+            React.createElement('svg', { className: 'w-16 h-16 text-white/20', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' }, [
+                React.createElement('circle', { cx: '11', cy: '11', r: '8' }),
+                React.createElement('line', { x1: '21', y1: '21', x2: '16.65', y2: '16.65' })
+            ]),
+            React.createElement('span', { className: 'text-xs font-bold text-white uppercase tracking-widest animate-pulse' }, 'Navigation en cours...')
+        ])
+      ]);
+    }`;
+  }
+
+  // --- INTERFACE PRINCIPALE (AVEC VIDÉO) ---
+  getSidebarCode() {
+    const pluginName = this.name;
+    const classes = this.getContainerClasses();
     const headerExtra = this.getHeaderExtra();
     const contentTop = this.getContentTop();
     const contentBottom = this.getContentBottom();
     const footerExtra = this.getFooterExtra();
 
     return `(props) => {
-      const { time, duration, isPaused } = props;
+      // Les props contiennent les valeurs éclatées de "...mediaState" + "features"
+      const { time = 0, duration = 0, paused = true, features = {} } = props;
+      const isPaused = paused;
+
       const [isDragging, setIsDragging] = React.useState(false);
       const [localTime, setLocalTime] = React.useState(time);
-      
-      // États pour la prévisualisation au survol
-      const [hoverTime, setHoverTime] = React.useState(0);
-      const [hoverPos, setHoverPos] = React.useState(0);
-      const [isHovering, setIsHovering] = React.useState(false);
 
       React.useEffect(() => {
         if (!isDragging) setLocalTime(time);
@@ -93,99 +168,84 @@ class BaseSyncPlugin {
         return (h > 0 ? h + ':' : '') + m.toString().padStart(2, '0') + ':' + sec.toString().padStart(2, '0');
       };
 
-      // Calcul du temps en fonction de la position de la souris
-      const handleMouseMove = (e) => {
-        const rect = e.currentTarget.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const percent = Math.max(0, Math.min(1, x / rect.width));
-        setHoverTime(percent * duration);
-        setHoverPos(x);
-        setIsHovering(true);
-      };
-
       const progress = duration > 0 ? (localTime / duration) * 100 : 0;
 
       return React.createElement('div', { 
-        className: 'flex flex-col flex-1 w-full p-6 gap-6 transition-all duration-700 ' + '${classes}' 
+        className: 'flex flex-col items-center justify-center w-full h-[85vh] p-10 gap-8 animate-in fade-in duration-1000 ' + '${classes}'
       }, [
-        // --- HEADER ---
-        React.createElement('div', { className: 'flex justify-between items-start', key: 'h' }, [
-            React.createElement('div', { className: 'flex flex-col gap-1' }, [
-              React.createElement('div', { className: 'flex items-center gap-2' }, [
-                React.createElement('div', { className: 'w-2 h-2 rounded-full ' + (isPaused ? 'bg-white/10' : 'bg-emerald-400 animate-pulse') }),
-                React.createElement('span', { className: 'text-[11px] font-black tracking-[0.3em] text-white/90 uppercase' }, "${pluginName}")
-              ]),
-              React.createElement('span', { className: 'text-[9px] font-bold text-white/20 uppercase tracking-widest' }, isPaused ? 'Paused' : 'Streaming')
-            ]),
+        // --- BADGE ---
+        React.createElement('div', { className: 'flex items-center gap-3 mb-6' }, [
+            React.createElement('div', { className: 'w-1.5 h-1.5 rounded-full ' + (isPaused ? 'bg-white/10' : 'bg-emerald-500 animate-pulse') }),
+            React.createElement('span', { className: 'text-[10px] font-black text-white/20 uppercase tracking-[0.4em]' }, "${pluginName}"),
             ${headerExtra}
         ]),
 
         ${contentTop},
 
         // --- TIMER ---
-        React.createElement('div', { className: 'flex-1 flex flex-col items-center justify-center py-4', key: 't' }, [
-            React.createElement('div', { className: 'relative text-8xl font-mono font-black text-white tracking-tighter tabular-nums' }, formatTime(localTime)),
-            React.createElement('span', { className: 'text-[10px] text-white/10 font-black uppercase tracking-[0.4em] mt-2' }, 'Total ' + formatTime(duration))
+        React.createElement('div', { className: 'flex flex-col items-center gap-2 mt-4' }, [
+            React.createElement('span', { 
+                className: 'font-mono font-black text-white tabular-nums text-center',
+                style: { fontSize: 'clamp(3rem, 12vw, 4.5rem)' }
+            }, formatTime(localTime)),
+            React.createElement('span', { className: 'text-[11px] font-black text-white/10 uppercase tracking-[0.3em]' }, 'Total: ' + formatTime(duration))
+        ]),
+
+        // --- PLAY/PAUSE BUTTON ---
+        React.createElement('button', {
+            onClick: () => {
+                if (window.__TAURI_INTERNALS__?.invoke) {
+                    window.__TAURI_INTERNALS__.invoke('playback_control', { 
+                        command: 'APPLY_STATE', 
+                        data: { media: { paused: !isPaused } } 
+                    });
+                }
+            },
+            className: 'group relative flex items-center justify-center w-20 h-20 rounded-full bg-slate-800/40 backdrop-blur-xl border border-white/10 hover:border-emerald-500/50 transition-all duration-700 shadow-[0_0_40px_rgba(0,0,0,0.3)] hover:shadow-emerald-500/20'
+        }, [
+            // Anneau extérieur pulsant
+            React.createElement('div', { className: 'absolute -inset-2 rounded-full border border-emerald-500/0 group-hover:border-emerald-500/10 transition-all duration-1000 scale-90 group-hover:scale-100' }),
+            // Halo de lumière
+            React.createElement('div', { className: 'absolute inset-0 rounded-full bg-emerald-500/0 group-hover:bg-emerald-500/5 blur-2xl transition-all duration-700' }),
+            // Icône avec ombre portée
+            isPaused 
+                ? React.createElement('svg', { className: 'w-8 h-8 text-white group-hover:text-emerald-400 fill-current translate-x-0.5 transition-all duration-500 drop-shadow-[0_0_8px_rgba(16,185,129,0.5)]', viewBox: '0 0 24 24' }, [
+                    React.createElement('path', { d: 'M5 3l14 9-14 9V3z' })
+                ])
+                : React.createElement('svg', { className: 'w-8 h-8 text-white group-hover:text-emerald-400 fill-current transition-all duration-500 drop-shadow-[0_0_8px_rgba(16,185,129,0.5)]', viewBox: '0 0 24 24' }, [
+                    React.createElement('rect', { x: '6', y: '4', width: '4', height: '16', rx: '1.5' }),
+                    React.createElement('rect', { x: '14', y: '4', width: '4', height: '16', rx: '1.5' })
+                ])
         ]),
 
         ${contentBottom},
 
-        // --- INTERACTIVE SLIDER ---
-        React.createElement('div', { 
-            className: 'bg-white/[0.02] border border-white/5 rounded-3xl p-6 flex flex-col gap-4 relative', 
-            key: 'f' 
-        }, [
-            // Tooltip de Preview
-            isHovering && React.createElement('div', {
-                className: 'absolute bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-xl pointer-events-none transition-transform duration-75 z-50',
-                style: { 
-                    left: hoverPos + 'px', 
-                    top: '-25px', 
-                    transform: 'translateX(-50%)' 
-                }
-            }, formatTime(hoverTime)),
-
+        // --- SLIDER PREMIUM ---
+        React.createElement('div', { className: 'relative w-full group/slider flex items-center mt-10 max-w-[300px] h-6 cursor-pointer' }, [
+            // Rail Arrière
+            React.createElement('div', { className: 'absolute h-1 w-full bg-white/5 rounded-full overflow-hidden' }),
+            // Rail Actif dégradé + Glow
             React.createElement('div', { 
-                className: 'group relative h-6 w-full flex items-center',
-                onMouseMove: handleMouseMove,
-                onMouseLeave: () => setIsHovering(false)
-            }, [
-                // Fond de la barre
-                React.createElement('div', { className: 'absolute h-1.5 w-full bg-white/5 rounded-full overflow-hidden' }),
-                
-                // Barre de progression (Temps actuel)
-                React.createElement('div', { 
-                    className: 'absolute h-1.5 bg-emerald-500 rounded-full pointer-events-none z-0',
-                    style: { width: progress + '%' }
-                }),
-
-                // Barre de Preview (Survol)
-                isHovering && React.createElement('div', { 
-                    className: 'absolute h-1.5 bg-white/10 rounded-full pointer-events-none z-0',
-                    style: { width: (hoverTime / duration * 100) + '%' }
-                }),
-
-                // Input invisible (Contrôleur)
-                React.createElement('input', {
-                    type: 'range',
-                    min: 0,
-                    max: duration || 100,
-                    value: localTime || 0,
-                    step: 0.1,
-                    onInput: (e) => {
-                      setIsDragging(true);
-                      setLocalTime(parseFloat(e.target.value));
-                    },
-                    onChange: (e) => {
-                      const val = parseFloat(e.target.value);
-                      if (window.__TAURI_INTERNALS__?.invoke) {
-                          window.__TAURI_INTERNALS__.invoke('playback_control', { command: 'seek', data: val });
-                      }
-                      setTimeout(() => setIsDragging(false), 600);
-                    },
-                    className: 'absolute w-full h-full appearance-none bg-transparent cursor-pointer z-10 accent-emerald-400'
-                })
-            ])
+                className: 'absolute h-1 bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-full shadow-[0_0_15px_rgba(16,185,129,0.3)]', 
+                style: { width: progress + '%' } 
+            }),
+            // Curseur personnalisé (Thumb)
+            React.createElement('div', { 
+                className: 'absolute w-3.5 h-3.5 bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.8)] border-2 border-emerald-500 transition-transform duration-200 group-hover/slider:scale-125 group-active/slider:scale-150',
+                style: { left: 'calc(' + progress + '% - 7px)', zIndex: 20 }
+            }),
+            // Input invisible pour le contrôle
+            React.createElement('input', {
+                type: 'range',
+                min: 0, max: duration || 100, value: localTime || 0, step: 0.1,
+                onInput: (e) => { setIsDragging(true); setLocalTime(parseFloat(e.target.value)); },
+                onChange: (e) => {
+                    const val = parseFloat(e.target.value);
+                    if (window.__TAURI_INTERNALS__?.invoke) window.__TAURI_INTERNALS__.invoke('playback_control', { command: 'APPLY_STATE', data: { media: { time: val } } });
+                    setTimeout(() => setIsDragging(false), 600);
+                },
+                className: 'absolute w-full h-full appearance-none bg-transparent cursor-pointer z-30 opacity-0'
+            })
         ]),
 
         ${footerExtra}

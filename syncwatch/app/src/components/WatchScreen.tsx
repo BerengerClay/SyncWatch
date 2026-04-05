@@ -13,37 +13,55 @@ interface Props {
 }
 
 export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave, onStop }) => {
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [PluginUI, setPluginUI] = useState<React.FC<any> | null>(null);
-  const lastCode = useRef<string | null>(null);
+  const [mediaState, setMediaState] = useState({ time: 0, duration: 0, paused: true, title: 'Vidéo inconnue' });
+  const [featuresState, setFeaturesState] = useState<any>({});
+  
+  const [IdleUI, setIdleUI] = useState<React.FC<any> | null>(null);
+  const [WatchUI, setWatchUI] = useState<React.FC<any> | null>(null);
+  const [currentMode, setCurrentMode] = useState<'IDLE'|'WATCH'>('IDLE');
+  
+  const lastWatchTime = useRef<number>(0);
+  const lastCodes = useRef<{IDLE: string|null, WATCH: string|null}>({IDLE: null, WATCH: null});
 
   const handleUpdate = useCallback((payload: any) => {
-    const { t, d, p, sidebarCode } = payload;
+    const { media, features, sidebarCode, mode } = payload;
     
-    // Protection anti-flicker : on ne met à jour que si les valeurs sont définies
-    if (t !== undefined) setCurrentTime(t);
-    if (d !== undefined) setDuration(d);
-    setIsPlaying(p === 0);
+    // 🛡️ Priority Engine: WATCH gagne toujours face à IDLE
+    let targetMode = mode as 'IDLE'|'WATCH';
+    let shouldIgnoreUI = false;
 
-    // Compilation dynamique si le code a changé
-    if (sidebarCode && sidebarCode !== lastCode.current) {
+    if (mode === 'WATCH') {
+        lastWatchTime.current = Date.now();
+        setCurrentMode('WATCH');
+    } else if (mode === 'IDLE') {
+        if (Date.now() - lastWatchTime.current < 1500) {
+            shouldIgnoreUI = true;
+            targetMode = 'WATCH'; 
+        } else {
+            setCurrentMode('IDLE');
+        }
+    }
+
+    if (media) setMediaState(media);
+    if (features) setFeaturesState((prev: any) => ({ ...prev, ...features }));
+
+    if (!shouldIgnoreUI && sidebarCode && sidebarCode !== lastCodes.current[targetMode]) {
         try {
             const factory = new Function('React', `return ${sidebarCode}`);
             const Component = factory(React);
-            setPluginUI(() => Component);
-            lastCode.current = sidebarCode;
-            console.log('[SyncWatch] ✅ Plugin UI compilé avec succès');
+            if (targetMode === 'WATCH') setWatchUI(() => Component);
+            else setIdleUI(() => Component);
+            
+            lastCodes.current[targetMode] = sidebarCode;
+            console.log(`[SyncWatch] ✅ ${targetMode} UI compilé avec succès`);
         } catch (e) {
-            console.error('[SyncWatch] ⚠️ Échec de compilation du Plugin UI:', e);
-            console.log('[SyncWatch] 📋 Code problématique:', sidebarCode);
+            console.error(`[SyncWatch] ⚠️ Échec de compilation (${targetMode}):`, e);
         }
-    } else if (!sidebarCode) {
-        // Optionnel : un log si on ne reçoit rien du tout
-        // console.log('[SyncWatch] 🧊 Pas de sidebarCode dans le payload');
     }
   }, []);
+
+  const PluginUI = currentMode === 'WATCH' ? WatchUI : IdleUI;
+
 
   return (
     <div className="flex flex-col h-screen w-full bg-gradient-to-b from-[#0f172a] via-[#020617] to-[#020617] text-slate-200 border-r border-white/5 shadow-2xl overflow-hidden font-sans select-none">
@@ -94,10 +112,9 @@ export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave, onStop }
       <div className="flex-1 flex flex-col items-center justify-center overflow-hidden">
         {PluginUI ? (
             <div className="w-full h-full animate-in fade-in zoom-in duration-700 flex flex-col">
-                <PluginUI time={currentTime} duration={duration} isPaused={!isPlaying} />
+                <PluginUI {...mediaState} features={featuresState} />
             </div>
         ) : (
-          /* Écran d'attente minimaliste avant le premier heartbeat */
           <div className="flex flex-col items-center gap-6 opacity-10">
               <Cpu size={64} className="text-white animate-pulse" />
               <span className="text-[10px] font-black tracking-[0.5em] uppercase">LINKING...</span>

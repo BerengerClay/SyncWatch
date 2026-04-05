@@ -5,5 +5,6 @@ commands.allow = [
     "playback_report",
     "playback_control",
     "set_view_mode",
-    "heartbeat"
+    "heartbeat",
+    "get_plugins"
 ]

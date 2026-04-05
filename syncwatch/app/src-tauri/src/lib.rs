@@ -3,6 +3,7 @@ use tauri::{
     window::WindowBuilder,
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Position, Size, WebviewUrl,
 };
+use tauri_plugin_opener;
 use url::Url;
 use serde::Deserialize;
 use std::fs;
@@ -12,11 +13,15 @@ const WIN_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.
 const SIDEBAR_WIDTH: f64 = 350.0;
 const DEV_URL: &str = "http://localhost:1420";
 
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 struct PluginConfig {
     name: String,
     url_pattern: String,
     script_filename: String,
+    #[serde(default)]
+    homepage: String,
+    #[serde(default)]
+    color: String,
 }
 
 /// Chargeur de Plugins : Assemble Base + Script Site + Init
@@ -88,6 +93,22 @@ fn playback_report(app: AppHandle, payload: serde_json::Value) {
 }
 
 #[tauri::command]
+async fn get_plugins() -> Result<Vec<PluginConfig>, String> {
+    let paths_to_try = vec!["src-tauri/plugins", "plugins"];
+    for path in paths_to_try {
+        let manifest = format!("{}/plugins.json", path);
+        if let Ok(m) = fs::read_to_string(&manifest) {
+            let plugins: Vec<PluginConfig> = serde_json::from_str(&m).map_err(|e| e.to_string())?;
+            return Ok(plugins);
+        }
+    }
+    Ok(vec![])
+}
+
+#[tauri::command]
+fn heartbeat() {}
+
+#[tauri::command]
 async fn set_view_mode(app: AppHandle, mode: String, url: Option<String>) -> Result<(), String> {
     let native_window = app.get_window("main").ok_or("Window error")?;
 
@@ -101,8 +122,38 @@ async fn set_view_mode(app: AppHandle, mode: String, url: Option<String>) -> Res
                 let parsed = Url::parse(&target_url).map_err(|e| e.to_string())?;
                 let full_script = get_plugin_script_for_url(&target_url);
 
-                let builder = WebviewBuilder::new("player", WebviewUrl::External(parsed))
-                    .initialization_script(&full_script);
+                let app_clone = app.clone();
+                let builder = WebviewBuilder::new("player", WebviewUrl::External(parsed));
+                
+                // Shim pour window.open : le SDK Google plante si window.open renvoie null.
+                // On renvoie un objet factice pour que le SDK continue son exécution.
+                let shim = r#"
+                    (function() {
+                        const oldOpen = window.open;
+                        window.open = function() {
+                            const win = oldOpen.apply(this, arguments);
+                            if (!win && arguments.length > 0) {
+                                console.log('[SyncWatch] Popup interceptée, retour du shim pour compatibilité SDK');
+                                return { closed: false, close: () => {}, focus: () => {}, postMessage: () => {}, location: { href: arguments[0] } };
+                            }
+                            return win;
+                        };
+                    })();
+                "#;
+
+                let builder = builder
+                    .user_agent(WIN_UA)
+                    .initialization_script(&format!("{}\n{}", shim, full_script))
+                    .on_new_window(move |url, _features| {
+                        // 🌍 Ouvre les popups dans une nouvelle fenêtre native Tauri avec le bon User Agent
+                        let label = format!("popup-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                        let _ = tauri::webview::WebviewWindowBuilder::new(&app_clone, label, WebviewUrl::External(url))
+                            .title("Authentification")
+                            .user_agent(WIN_UA)
+                            .inner_size(600.0, 700.0)
+                            .build();
+                        tauri::webview::NewWindowResponse::Deny
+                    });
 
                 let _player = native_window
                     .add_child(builder, Position::Logical(LogicalPosition::new(SIDEBAR_WIDTH, 0.0)), Size::Logical(LogicalSize::new(100.0, 100.0)))
@@ -122,6 +173,7 @@ fn update_layout(app: &AppHandle) {
     if let Some(window) = app.get_window("main") {
         let physical = window.inner_size().unwrap();
         let logical = physical.to_logical::<f64>(window.scale_factor().unwrap_or(1.0));
+        println!("[SyncWatch] update_layout: logical_w={}, logical_h={}", logical.width, logical.height);
         
         if let Some(sidebar) = app.get_webview("sidebar") {
             if let Some(player) = app.get_webview("player") {
@@ -146,10 +198,11 @@ fn update_layout(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let window = WindowBuilder::new(app, "main")
                 .title("SyncWatch Pro")
-                .inner_size(1000.0, 600.0)
+                .inner_size(1280.0, 720.0)
                 .build()?;
 
             let sidebar_url = if cfg!(debug_assertions) { 
@@ -161,14 +214,14 @@ pub fn run() {
             let _sidebar = window.add_child(
                 WebviewBuilder::new("sidebar", sidebar_url).user_agent(WIN_UA),
                 Position::Logical(LogicalPosition::new(0.0, 0.0)),
-                Size::Logical(LogicalSize::new(1400.0, 900.0))
+                Size::Logical(LogicalSize::new(SIDEBAR_WIDTH, 720.0)),
             )?;
 
             let handle = app.app_handle().clone();
             window.on_window_event(move |e| if let tauri::WindowEvent::Resized(_) = e { update_layout(&handle); });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![set_view_mode, playback_control, playback_report])
+        .invoke_handler(tauri::generate_handler![set_view_mode, playback_control, playback_report, get_plugins, heartbeat])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

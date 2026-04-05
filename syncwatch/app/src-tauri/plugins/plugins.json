@@ -1,17 +1,23 @@
 [
   {
     "name": "YouTube",
-    "url_pattern": "https://www.youtube.com",
-    "script_filename": "youtube.js"
+    "url_pattern": "youtube.com",
+    "script_filename": "youtube.js",
+    "homepage": "https://www.youtube.com",
+    "color": "bg-red-500/10 hover:bg-red-500/20 border-red-500/20 text-red-500"
   },
   {
     "name": "TF1+",
     "url_pattern": "tf1.fr",
-    "script_filename": "tf1.js"
+    "script_filename": "tf1.js",
+    "homepage": "https://www.tf1.fr",
+    "color": "bg-blue-500/10 hover:bg-blue-500/20 border-blue-500/20 text-blue-500"
   },
   {
     "name": "Deezer",
     "url_pattern": "deezer.com",
-    "script_filename": "deezer.js"
+    "script_filename": "deezer.js",
+    "homepage": "https://www.deezer.com",
+    "color": "bg-[#A238FF]/10 hover:bg-[#A238FF]/20 border-[#A238FF]/30 text-[#A238FF]"
   }
 ]

@@ -50,8 +50,7 @@ function App() {
     invoke('heartbeat').catch(console.error);
   }, []);
 
-  const handleSelectSource = (source: 'YOUTUBE' | 'TF1') => {
-    const url = source === 'YOUTUBE' ? 'https://www.youtube.com' : 'https://www.tf1.fr/';
+  const handleSelectSource = (url: string) => {
     invoke('set_view_mode', { mode: 'WATCH', url });
     setState('WATCH');
   };
