@@ -4,6 +4,26 @@ class YouTubePlugin extends BaseSyncPlugin {
     this.name = 'YouTube';
   }
 
+  isWatchingAd() {
+    const player = document.querySelector('#movie_player');
+    return player && player.classList.contains('ad-showing');
+  }
+
+  findVideoElement() {
+    const player = document.querySelector('#movie_player');
+    const video = document.querySelector('#movie_player video');
+
+    if (!player || !video) return null;
+
+    if (!video.src || video.src === '') return null;
+
+    if (player.classList.contains('unstarted-mode')) return null;
+
+    // if (player.classList.contains('ad-showing')) return null;
+    
+    return video;
+  }
+
   getCustomState() {
     const title = document.querySelector('h1.ytd-watch-metadata') || 
                   document.querySelector('.ytd-video-primary-info-renderer h1');

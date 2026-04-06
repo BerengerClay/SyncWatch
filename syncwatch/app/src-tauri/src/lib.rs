@@ -26,28 +26,33 @@ struct PluginConfig {
 
 /// Chargeur de Plugins : Assemble Base + Script Site + Init
 fn get_plugin_script_for_url(url: &str) -> String {
-    let paths_to_try = vec!["src-tauri/plugins", "plugins"];
-    let (mut plugins_json, mut base_script, mut root_path) = (None, None, None);
+    let paths_to_try = vec!["plugins", "src-tauri/plugins", "../plugins"];
+    let (mut plugins_json, mut core_script, mut base_script, mut root_path) = (None, None, None, None);
 
     for path in paths_to_try {
         let manifest = format!("{}/plugins.json", path);
+        let core = format!("{}/core.js", path);
         let base = format!("{}/base.js", path);
         
         if let Ok(m) = fs::read_to_string(&manifest) {
-            if let Ok(b) = fs::read_to_string(&base) {
-                plugins_json = Some(m);
-                base_script = Some(b);
-                root_path = Some(path.to_string());
-                break;
+            if let Ok(c) = fs::read_to_string(&core) {
+                if let Ok(b) = fs::read_to_string(&base) {
+                    plugins_json = Some(m);
+                    core_script = Some(c);
+                    base_script = Some(b);
+                    root_path = Some(path.to_string());
+                    break;
+                }
             }
         }
     }
 
-    if plugins_json.is_none() || base_script.is_none() {
+    if plugins_json.is_none() || core_script.is_none() || base_script.is_none() {
         return "".to_string();
     }
 
     let plugins: Vec<PluginConfig> = serde_json::from_str(&plugins_json.unwrap()).unwrap_or_default();
+    let core = core_script.unwrap();
     let base = base_script.unwrap();
     let root = root_path.unwrap();
 
@@ -55,13 +60,13 @@ fn get_plugin_script_for_url(url: &str) -> String {
         if url.contains(&plugin.url_pattern) {
             let p_path = format!("{}/{}", root, plugin.script_filename);
             let p_script = fs::read_to_string(&p_path).unwrap_or_default();
-            // L'ordre est CRITIQUE : Base -> Plugin -> Initialisation
-            return format!("{}\n{}\nif(window.SW_PLUGIN) window.SW_PLUGIN.init();", base, p_script);
+            // L'ordre est CRITIQUE : Core -> Base -> Plugin -> Initialisation
+            return format!("{}\n{}\n{}\nif(window.SW_PLUGIN) window.SW_PLUGIN.init();", core, base, p_script);
         }
     }
 
     // Fallback HTML5
-    format!("{}\nwindow.SW_PLUGIN = new BaseSyncPlugin();\nwindow.SW_PLUGIN.init();", base)
+    format!("{}\n{}\nwindow.SW_PLUGIN = new BaseSyncPlugin();\nwindow.SW_PLUGIN.init();", core, base)
 }
 
 // --- COMMANDES TAURI ---
@@ -83,10 +88,6 @@ async fn playback_control(
 #[tauri::command]
 fn playback_report(app: AppHandle, payload: serde_json::Value) {
     if let Some(window) = app.get_window("main") {
-        // Met à jour le titre de la fenêtre pour le debug rapide
-        if let Some(t) = payload.get("t").and_then(|v| v.as_f64()) {
-            let _ = window.set_title(&format!("SyncWatch [SYNC OK] - {:.0}s", t));
-        }
         // Envoie les données (incluant le sidebarCode au début) à la Sidebar React
         let _ = window.emit("player-update", payload);
     }
@@ -94,7 +95,7 @@ fn playback_report(app: AppHandle, payload: serde_json::Value) {
 
 #[tauri::command]
 async fn get_plugins() -> Result<Vec<PluginConfig>, String> {
-    let paths_to_try = vec!["src-tauri/plugins", "plugins"];
+    let paths_to_try = vec!["plugins", "src-tauri/plugins", "../plugins"];
     for path in paths_to_try {
         let manifest = format!("{}/plugins.json", path);
         if let Ok(m) = fs::read_to_string(&manifest) {

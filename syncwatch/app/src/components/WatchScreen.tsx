@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { VideoView } from './VideoView';
 import { Crown, LogOut, Radio, Cpu, Square } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 
 // Indispensable pour que les plugins puissent utiliser React.createElement
 (window as any).React = React;
@@ -20,48 +21,48 @@ export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave, onStop }
   const [WatchUI, setWatchUI] = useState<React.FC<any> | null>(null);
   const [currentMode, setCurrentMode] = useState<'IDLE'|'WATCH'>('IDLE');
   
-  const lastWatchTime = useRef<number>(0);
   const lastCodes = useRef<{IDLE: string|null, WATCH: string|null}>({IDLE: null, WATCH: null});
 
-  const handleUpdate = useCallback((payload: any) => {
-    const { media, features, sidebarCode, mode } = payload;
+const handleUpdate = useCallback((payload: any) => {
+    const mode = payload.mode as 'IDLE' | 'WATCH';
+    const { media, features, sidebarCode } = payload;
     
-    // 🛡️ Priority Engine: WATCH gagne toujours face à IDLE
-    let targetMode = mode as 'IDLE'|'WATCH';
-    let shouldIgnoreUI = false;
+    // 1. On applique le mode bêtement (ce que le serveur/plugin décide)
+    setCurrentMode(mode);
 
-    if (mode === 'WATCH') {
-        lastWatchTime.current = Date.now();
-        setCurrentMode('WATCH');
-    } else if (mode === 'IDLE') {
-        if (Date.now() - lastWatchTime.current < 1500) {
-            shouldIgnoreUI = true;
-            targetMode = 'WATCH'; 
-        } else {
-            setCurrentMode('IDLE');
-        }
-    }
-
+    // 2. On met à jour les données
     if (media) setMediaState(media);
     if (features) setFeaturesState((prev: any) => ({ ...prev, ...features }));
 
-    if (!shouldIgnoreUI && sidebarCode && sidebarCode !== lastCodes.current[targetMode]) {
+    // 3. On compile l'UI si on reçoit un nouveau code
+    if (sidebarCode && sidebarCode !== lastCodes.current[mode]) {
         try {
             const factory = new Function('React', `return ${sidebarCode}`);
             const Component = factory(React);
-            if (targetMode === 'WATCH') setWatchUI(() => Component);
+            
+            if (mode === 'WATCH') setWatchUI(() => Component);
             else setIdleUI(() => Component);
             
-            lastCodes.current[targetMode] = sidebarCode;
-            console.log(`[SyncWatch] ✅ ${targetMode} UI compilé avec succès`);
+            lastCodes.current[mode] = sidebarCode;
+            console.log(`[SyncWatch] ✅ ${mode} UI compilé avec succès`);
         } catch (e) {
-            console.error(`[SyncWatch] ⚠️ Échec de compilation (${targetMode}):`, e);
+            console.error(`[SyncWatch] ⚠️ Échec de compilation (${mode}):`, e);
         }
     }
-  }, []);
+}, []);
 
   const PluginUI = currentMode === 'WATCH' ? WatchUI : IdleUI;
 
+  // LA VERSION INSTANTANÉE
+  const handleControl = useCallback((command: string, data: any) => {
+      // 1. On envoie l'ordre à la vidéo (Tauri)
+      invoke('playback_control', { command, data }).catch(console.error);
+
+      // 2. NOUVEAU : Mise à jour optimiste (React) !
+      if (command === 'APPLY_STATE' && data.media) {
+          setMediaState((prev: any) => ({ ...prev, ...data.media }));
+      }
+  }, []);
 
   return (
     <div className="flex flex-col h-screen w-full bg-gradient-to-b from-[#0f172a] via-[#020617] to-[#020617] text-slate-200 border-r border-white/5 shadow-2xl overflow-hidden font-sans select-none">
@@ -112,7 +113,8 @@ export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave, onStop }
       <div className="flex-1 flex flex-col items-center justify-center overflow-hidden">
         {PluginUI ? (
             <div className="w-full h-full animate-in fade-in zoom-in duration-700 flex flex-col">
-                <PluginUI {...mediaState} features={featuresState} />
+                {/* Injecte sendControl ici ! */}
+                <PluginUI {...mediaState} features={featuresState} sendControl={handleControl} />
             </div>
         ) : (
           <div className="flex flex-col items-center gap-6 opacity-10">

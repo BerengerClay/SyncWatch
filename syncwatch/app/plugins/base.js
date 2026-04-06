@@ -1,18 +1,40 @@
 /**
  * SyncWatch - BaseSyncPlugin V8 (Agnostic State Streaming Edition)
  */
-class BaseSyncPlugin {
+class BaseSyncPlugin extends SyncWatchCore {
   constructor() {
+    super(); // Ne surtout pas oublier d'appeler le constructeur du Core !
     this.name = 'Base Plugin';
     this.lastState = { media: null, features: null };
     this.uiSent = false;
     this.videoElement = null;
+    this.currentMode = null; 
+  }
+
+  findVideoElement() {
+    return document.querySelector('video') || document.querySelector('audio');
   }
 
   getVideo() {
-    if (!this.videoElement || !document.body.contains(this.videoElement)) {
-      this.videoElement = document.querySelector('video') || document.querySelector('audio');
+    const currentVideo = this.findVideoElement();
+
+    if (!currentVideo) {
+        this.videoElement = null;
+        return null;
     }
+
+    if (currentVideo && currentVideo !== this.videoElement) {
+      this.videoElement = currentVideo;
+      
+      this.videoElement.addEventListener('pause', () => this.report());
+      this.videoElement.addEventListener('play', () => this.report());
+      this.videoElement.addEventListener('seeked', () => this.report());
+    }
+
+    if (this.videoElement && !document.body.contains(this.videoElement)) {
+      this.videoElement = null;
+    }
+
     return this.videoElement;
   }
 
@@ -36,65 +58,52 @@ class BaseSyncPlugin {
   getCustomState() { return {}; } // À surcharger dans youtube.js / tf1.js
 
   init() {
+    if (window.location.href.startsWith('about:')) {
+        return; 
+    }
+
     if (window.swInitDone) return;
     window.swInitDone = true;
 
-    console.log(`[SyncWatch] 🔌 Moteur ${this.name} initialisé (V8).`);
-    
-    // L'écouteur global qui distribue les tiroirs d'état
-    window.syncWatchControl = (cmd, data) => {
+    this.listenToApp((cmd, data) => {
         if (cmd === 'APPLY_STATE' && data) {
             if (data.media) this.applyBaseState(data.media);
             if (data.features) this.applyCustomState(data.features);
+        } else {
+            this.handleCustomCommand(cmd, data);
         }
-    };
+    });
 
-    this.reportInterval = setInterval(() => this.report(), 450);
+    this.reportInterval = setInterval(() => this.report(), 2000);
   }
+
+  handleCustomCommand(cmd, data) {}
 
   report() {
     const currentBase = this.getBaseState();
 
-    // --- ÉTAT IDLE (NAVIGATION) ---
-    if (!currentBase) {
-      if (this.currentMode !== 'IDLE') {
-          this.currentMode = 'IDLE';
-          this.uiSent = false;
-      }
-      const idlePayload = {
-        mode: 'IDLE',
-        media: null,
-        features: this.getCustomState(),
-        sidebarCode: !this.uiSent ? this.getIdleSidebarCode() : null
-      };
+    if (window !== window.top && !currentBase) return; 
 
-      if (window.__TAURI_INTERNALS__?.invoke) {
-        window.__TAURI_INTERNALS__.invoke('playback_report', { payload: idlePayload })
-          .then(() => { if (idlePayload.sidebarCode) this.uiSent = true; })
-          .catch(() => {});
-      }
-      return;
+    const newMode = currentBase ? 'WATCH' : 'IDLE';
+
+    if (this.currentMode !== newMode) {
+        console.log(`[SyncWatch] 🔄 Bascule de mode : ${this.currentMode} -> ${newMode}`);
+        this.currentMode = newMode;
+        this.uiSent = false; 
     }
 
-    // --- ÉTAT WATCH (LECTURE) ---
-    if (this.currentMode !== 'WATCH') {
-        this.currentMode = 'WATCH';
-        this.uiSent = false;
-    }
-
-    const fullState = {
-      mode: 'WATCH',
-      media: currentBase,
+    const payload = {
+      mode: this.currentMode,
+      media: currentBase, 
       features: this.getCustomState(),
-      sidebarCode: !this.uiSent ? this.getSidebarCode() : null
+      sidebarCode: !this.uiSent 
+          ? (this.currentMode === 'WATCH' ? this.getSidebarCode() : this.getIdleSidebarCode()) 
+          : null
     };
 
-    // On envoie l'état complet dans le tuyau
-    if (window.__TAURI_INTERNALS__?.invoke) {
-      window.__TAURI_INTERNALS__.invoke('playback_report', { payload: fullState })
-        .then(() => { if (fullState.sidebarCode) this.uiSent = true; })
-        .catch(() => {});
-    }
+    this.sendReportToApp(payload).then(() => { 
+      if (payload.sidebarCode) this.uiSent = true; 
+    });
   }
 
   // --- RÉCEPTION DE L'ÉTAT ---
@@ -141,12 +150,7 @@ class BaseSyncPlugin {
     return `React.createElement('button', {
         key: 'play-pause-btn',
         onClick: () => {
-            if (window.__TAURI_INTERNALS__?.invoke) {
-                window.__TAURI_INTERNALS__.invoke('playback_control', { 
-                    command: 'APPLY_STATE', 
-                    data: { media: { paused: !isPaused } } 
-                });
-            }
+            props.sendControl('APPLY_STATE', { media: { paused: !isPaused } });
         },
         className: 'group relative flex items-center justify-center w-20 h-20 rounded-full bg-slate-800/40 backdrop-blur-xl border border-white/10 hover:border-emerald-500/50 transition-all duration-700 shadow-[0_0_40px_rgba(0,0,0,0.3)] hover:shadow-emerald-500/20'
     }, [
@@ -183,7 +187,7 @@ class BaseSyncPlugin {
             onInput: (e) => { setIsDragging(true); setLocalTime(parseFloat(e.target.value)); },
             onChange: (e) => {
                 const val = parseFloat(e.target.value);
-                if (window.__TAURI_INTERNALS__?.invoke) window.__TAURI_INTERNALS__.invoke('playback_control', { command: 'APPLY_STATE', data: { media: { time: val } } });
+                props.sendControl('APPLY_STATE', { media: { time: val } });
                 setTimeout(() => setIsDragging(false), 600);
             },
             className: 'absolute w-full h-full appearance-none bg-transparent cursor-pointer z-30 opacity-0'
@@ -196,7 +200,6 @@ class BaseSyncPlugin {
     const pluginName = this.name;
     const classes = this.getContainerClasses();
     
-    // On génère les blocs de code des composants
     const badge = this.renderBadgeCode(pluginName, this.getHeaderExtra());
     const timer = this.renderTimerCode();
     const playBtn = this.renderPlayPauseButtonCode();
@@ -213,9 +216,29 @@ class BaseSyncPlugin {
       const [isDragging, setIsDragging] = React.useState(false);
       const [localTime, setLocalTime] = React.useState(time);
 
+      // 🔄 1. LE RECALIBRAGE (Gestion du Heartbeat de 3.5s)
       React.useEffect(() => {
-        if (!isDragging) setLocalTime(time);
+        if (!isDragging) {
+            // Si le décalage entre le temps autonome de React et le vrai temps de la vidéo
+            // est supérieur à 1 seconde, on force React à se recaler sur la vraie vidéo.
+            // (Si le décalage est minime, on ignore pour éviter les micro-saccades visuelles)
+            setLocalTime(prev => Math.abs(prev - time) > 1 ? time : prev);
+        }
       }, [time, isDragging]);
+
+      // 🏎️ 2. LE MOTEUR AUTONOME (L'animation ultra fluide)
+      React.useEffect(() => {
+        let interval;
+        // Si la vidéo n'est pas en pause et que l'utilisateur ne touche pas au slider...
+        if (!isPaused && !isDragging) {
+            // ... React fait avancer le temps tout seul de 0.1s toutes les 100ms !
+            interval = setInterval(() => {
+                setLocalTime(prev => prev + 0.1);
+            }, 100);
+        }
+        // On nettoie l'intervalle quand on fait pause ou qu'on démonte le composant
+        return () => clearInterval(interval);
+      }, [isPaused, isDragging]);
 
       const formatTime = (s) => {
         if (!s || isNaN(s)) return "00:00";

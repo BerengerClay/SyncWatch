@@ -9,7 +9,7 @@ class TF1Plugin extends BaseSyncPlugin {
     return window.location.hostname.includes('prod-player.tf1.fr');
   }
 
-  getVideo() {
+  findVideoElement() {
     if (!this.isTargetIframe()) return null;
     return document.querySelector('#ntrs-video-media');
   }
