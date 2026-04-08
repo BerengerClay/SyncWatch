@@ -23,24 +23,37 @@ export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave, onStop }
   const lastCode = useRef<string | null>(null);
 
   const handleUpdate = useCallback((payload: any) => {
-    // Plus aucune notion de 'mode' ! Le shell s'en fiche.
     const { media, features, sidebarCode } = payload;
 
-    // Mise à jour de la météo (Données brutes)
-    // Si media est undefined ou null, on force null
-    setMediaState(media || null);
-    if (features) setFeaturesState((prev: any) => ({ ...prev, ...features }));
+    // 🧠 FUSION INTELLIGENTE DES MÉDIAS
+    if (media) {
+      setMediaState((prev: any) => {
+        // Si on n'avait rien avant, on prend le nouveau
+        if (!prev) return media;
+        
+        // Sinon, on fusionne ! 
+        // On garde tout de 'prev', on ecrase avec 'media'
+        return {
+          ...prev,
+          ...media
+        };
+      });
+    }
 
-    // Compilation de l'interface SI on reçoit un nouveau plan de construction
+    // Idem pour les features (déjà correct dans ton code, mais on peut sécuriser)
+    if (features) {
+      setFeaturesState((prev: any) => ({ ...prev, ...features }));
+    }
+
+    // Compilation du plugin (Ton code était déjà bon ici)
     if (sidebarCode && sidebarCode !== lastCode.current) {
-        try {
-            const factory = new Function('React', `return ${sidebarCode}`);
-            setPluginUI(() => factory(React));
-            lastCode.current = sidebarCode;
-            console.log(`[SyncWatch] ✅ UI unifiée du plugin compilée avec succès`);
-        } catch (e) {
-            console.error(`[SyncWatch] ⚠️ Échec de compilation :`, e);
-        }
+      try {
+        const factory = new Function('React', `return ${sidebarCode}`);
+        setPluginUI(() => factory(React));
+        lastCode.current = sidebarCode;
+      } catch (e) {
+        console.error(`[SyncWatch] ⚠️ Échec de compilation :`, e);
+      }
     }
   }, []);
 

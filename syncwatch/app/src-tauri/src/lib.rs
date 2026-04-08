@@ -111,56 +111,49 @@ fn heartbeat() {}
 
 #[tauri::command]
 async fn set_view_mode(app: AppHandle, mode: String, url: Option<String>) -> Result<(), String> {
-    let native_window = app.get_window("main").ok_or("Window error")?;
+    let main_window = app.get_window("main").ok_or("Fenêtre principale introuvable")?;
 
     match mode.as_str() {
-        "HOME" | "GROUP" => {
-            if let Some(player) = app.get_webview("player") { let _ = player.close(); }
-            update_layout(&app); // Repasse en plein écran
+        "HOME" => {
+            if let Some(player) = app.get_webview_window("player") {
+                let _ = player.close();
+            }
         }
         "WATCH" => {
             if let Some(target_url) = url {
-                let parsed = Url::parse(&target_url).map_err(|e| e.to_string())?;
+                let parsed_url = tauri::WebviewUrl::External(url::Url::parse(&target_url).map_err(|e| e.to_string())?);
                 let full_script = get_plugin_script_for_url(&target_url);
 
-                let app_clone = app.clone();
-                let builder = WebviewBuilder::new("player", WebviewUrl::External(parsed));
-                
-                // Shim pour window.open : le SDK Google plante si window.open renvoie null.
-                // On renvoie un objet factice pour que le SDK continue son exécution.
-                let shim = r#"
-                    (function() {
-                        const oldOpen = window.open;
-                        window.open = function() {
-                            const win = oldOpen.apply(this, arguments);
-                            if (!win && arguments.length > 0) {
-                                console.log('[SyncWatch] Popup interceptée, retour du shim pour compatibilité SDK');
-                                return { closed: false, close: () => {}, focus: () => {}, postMessage: () => {}, location: { href: arguments[0] } };
-                            }
-                            return win;
-                        };
-                    })();
-                "#;
+                // --- LOGIQUE SPÉCIFIQUE LINUX (Fenêtres séparées) ---
+                if cfg!(target_os = "linux") {
+                    // Si le player existe déjà, on le ferme avant d'en ouvrir un nouveau
+                    if let Some(old_player) = app.get_webview_window("player") {
+                        let _ = old_player.close();
+                    }
 
-                let builder = builder
-                    .user_agent(WIN_UA)
-                    .initialization_script(&format!("{}\n{}", shim, full_script))
-                    .on_new_window(move |url, _features| {
-                        // 🌍 Ouvre les popups dans une nouvelle fenêtre native Tauri avec le bon User Agent
-                        let label = format!("popup-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
-                        let _ = tauri::webview::WebviewWindowBuilder::new(&app_clone, label, WebviewUrl::External(url))
-                            .title("Authentification")
-                            .user_agent(WIN_UA)
-                            .inner_size(600.0, 700.0)
-                            .build();
-                        tauri::webview::NewWindowResponse::Deny
-                    });
+                    // On crée une vraie fenêtre indépendante
+                    let _player_win = tauri::webview::WebviewWindowBuilder::new(&app, "player", parsed_url)
+                        .title("SyncWatch Player")
+                        .inner_size(960.0, 540.0) // Taille par défaut
+                        .user_agent(WIN_UA)
+                        .initialization_script(&full_script)
+                        .build()
+                        .map_err(|e| e.to_string())?;
+                } 
+                // --- LOGIQUE WINDOWS/MAC (On garde l'intégration si tu veux) ---
+                else {
+                    let builder = tauri::webview::WebviewBuilder::new("player", parsed_url)
+                        .user_agent(WIN_UA)
+                        .initialization_script(&full_script);
 
-                let _player = native_window
-                    .add_child(builder, Position::Logical(LogicalPosition::new(SIDEBAR_WIDTH, 0.0)), Size::Logical(LogicalSize::new(100.0, 100.0)))
-                    .map_err(|e| e.to_string())?;
-
-                update_layout(&app);
+                    let _ = main_window.add_child(
+                        builder, 
+                        tauri::Position::Logical(tauri::LogicalPosition::new(350.0, 0.0)), 
+                        tauri::Size::Logical(tauri::LogicalSize::new(800.0, 600.0))
+                    ).map_err(|e| e.to_string())?;
+                    
+                    update_layout(&app);
+                }
             }
         }
         _ => {}
