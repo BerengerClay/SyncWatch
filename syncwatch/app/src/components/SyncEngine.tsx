@@ -9,7 +9,7 @@ interface Props {
   onUpdate: (payload: any) => void;
 }
 
-export const VideoView: React.FC<Props> = ({ isHost, onUpdate }) => {
+export const SyncEngine: React.FC<Props> = ({ isHost, onUpdate }) => {
   useEffect(() => {
     // 1. SENS SORTANT (Ton Plugin -> Ton React & Tes Amis)
     let unlistenTauri: (() => void) | undefined;
@@ -29,7 +29,7 @@ export const VideoView: React.FC<Props> = ({ isHost, onUpdate }) => {
           onUpdate(fullState);
         });
       } catch (err) {
-        console.error('[VideoView] Failed to setup listener:', err);
+        console.error('[SyncEngine] Failed to setup listener:', err);
       }
     };
     setupTauriListener();

@@ -1,16 +1,30 @@
 /**
- * SyncWatch - BaseSyncPlugin V8 (Agnostic State Streaming Edition)
+ * SyncWatch - BaseSyncPlugin V10 (Window.top Master + Debounce Cascade + Dumb Shell)
  */
 class BaseSyncPlugin extends SyncWatchCore {
   constructor() {
-    super(); // Ne surtout pas oublier d'appeler le constructeur du Core !
+    super();
     this.name = 'Base Plugin';
-    this.lastState = { media: null, features: null };
     this.uiSent = false;
     this.videoElement = null;
-    this.currentMode = null; 
+
+    // 🧠 Mémoire du Top (Le Cerveau)
+    this.aggregatedMedia = null;
+    this.aggregatedFeatures = {};
+    this.syncTimeout = null;
   }
 
+  // --- 🛠️ HOOKS À SURCHARGER (Dans tf1.js, youtube.js...) ---
+  scrapeTopData() { return {}; } // Ex: { tf1Title: document.querySelector('h1').innerText }
+  getCustomState() { return {}; } // Ex: { isAd: true }
+  
+  getContainerClasses() { return 'bg-slate-900/40 border-white/5 shadow-2xl'; }
+  getHeaderExtra() { return 'null'; }
+  getContentTop() { return 'null'; }
+  getContentBottom() { return 'null'; }
+  getFooterExtra() { return 'null'; }
+
+  // --- MOTEUR DOM VIDÉO (Pour les Iframes) ---
   findVideoElement() {
     return document.querySelector('video') || document.querySelector('audio');
   }
@@ -23,27 +37,23 @@ class BaseSyncPlugin extends SyncWatchCore {
         return null;
     }
 
-    if (currentVideo && currentVideo !== this.videoElement) {
+    // Si on a trouvé une NOUVELLE vidéo, on lui attache nos alarmes (TRIGGER_SYNC)
+    if (currentVideo !== this.videoElement) {
       this.videoElement = currentVideo;
       
-      this.videoElement.addEventListener('pause', () => this.report());
-      this.videoElement.addEventListener('play', () => this.report());
-      this.videoElement.addEventListener('seeked', () => this.report());
+      const triggerGlobalSync = () => window.top.postMessage({ type: 'SW_TRIGGER_SYNC' }, '*');
+      this.videoElement.addEventListener('play', triggerGlobalSync);
+      this.videoElement.addEventListener('pause', triggerGlobalSync);
+      this.videoElement.addEventListener('seeked', triggerGlobalSync); // Saut manuel uniquement !
     }
 
+    // Si la vidéo n'est plus dans le DOM, on nettoie
     if (this.videoElement && !document.body.contains(this.videoElement)) {
       this.videoElement = null;
     }
 
     return this.videoElement;
   }
-
-  // --- HOOKS ---
-  getContainerClasses() { return 'bg-slate-900/40 border-white/5 shadow-2xl'; }
-  getHeaderExtra() { return 'null'; }
-  getContentTop() { return 'null'; }
-  getContentBottom() { return 'null'; }
-  getFooterExtra() { return 'null'; }
 
   getBaseState() {
     const v = this.getVideo();
@@ -55,83 +65,160 @@ class BaseSyncPlugin extends SyncWatchCore {
     };
   }
 
-  getCustomState() { return {}; } // À surcharger dans youtube.js / tf1.js
-
-  init() {
-    if (window.location.href.startsWith('about:')) {
-        return; 
-    }
-
-    if (window.swInitDone) return;
-    window.swInitDone = true;
-
-    this.listenToApp((cmd, data) => {
-        if (cmd === 'APPLY_STATE' && data) {
-            if (data.media) this.applyBaseState(data.media);
-            if (data.features) this.applyCustomState(data.features);
-        } else {
-            this.handleCustomCommand(cmd, data);
-        }
-    });
-
-    this.reportInterval = setInterval(() => this.report(), 2000);
-  }
-
-  handleCustomCommand(cmd, data) {}
-
-  report() {
-    const currentBase = this.getBaseState();
-
-    if (window !== window.top && !currentBase) return; 
-
-    const newMode = currentBase ? 'WATCH' : 'IDLE';
-
-    if (this.currentMode !== newMode) {
-        console.log(`[SyncWatch] 🔄 Bascule de mode : ${this.currentMode} -> ${newMode}`);
-        this.currentMode = newMode;
-        this.uiSent = false; 
-    }
-
-    const payload = {
-      mode: this.currentMode,
-      media: currentBase, 
-      features: this.getCustomState(),
-      sidebarCode: !this.uiSent 
-          ? (this.currentMode === 'WATCH' ? this.getSidebarCode() : this.getIdleSidebarCode()) 
-          : null
-    };
-
-    this.sendReportToApp(payload).then(() => { 
-      if (payload.sidebarCode) this.uiSent = true; 
-    });
-  }
-
-  // --- RÉCEPTION DE L'ÉTAT ---
   applyBaseState(mediaState) {
     const v = this.getVideo();
     if (!v) return;
 
-    // Règle de Tolérance : On ne force le temps que si l'écart est > 2 secondes
-    // Cela évite les saccades dues à la latence réseau
     if (Math.abs(v.currentTime - mediaState.time) > 2) {
       v.currentTime = mediaState.time;
     }
     
-    // Synchronisation de la lecture (Play/Pause)
     if (v.paused !== mediaState.paused) {
       mediaState.paused ? v.pause() : v.play().catch(() => {});
     }
   }
 
-  applyCustomState(featuresState) {} // Pour les plugins enfants
+  // --- 🌐 LE CŒUR DU RÉSEAU (Top vs Iframe) ---
+  init() {
+    if (window.location.href.startsWith('about:')) return; 
 
-  // --- COMPOSANTS UI (Générateurs de code pour le sidebar) ---
+    if (window === window.top) {
+        this.initTopMaster(); // Le Patron
+    } else {
+        this.initIframeSensor(); // Les Employés
+    }
+  }
+
+  // 👑 LE PATRON (window.top)
+  initTopMaster() {
+    if (window.swInitDone) return;
+    window.swInitDone = true;
+
+    // 🚨 LA PROCÉDURE DE RASSEMBLEMENT (Debounce)
+    const forceSync = () => {
+        // 1. On vide la mémoire vidéo ! (Si l'iframe est morte, ça restera null -> IDLE)
+        this.aggregatedMedia = this.getBaseState();
+
+        // 2. On demande à toutes les iframes de parler MAINTENANT
+        document.querySelectorAll('iframe').forEach(f => {
+            f.contentWindow?.postMessage({ type: 'SW_FORCE_UPDATE' }, '*');
+        });
+
+        // 3. Le Top note ses propres infos (Le Titre)
+        const topData = this.scrapeTopData();
+        this.aggregatedFeatures = { ...this.aggregatedFeatures, ...topData };
+
+        // 4. On attend 20ms que tout le monde réponde, puis on envoie le paquet final
+        if (this.syncTimeout) clearTimeout(this.syncTimeout);
+        this.syncTimeout = setTimeout(() => {
+            const payload = {
+                media: this.aggregatedMedia,
+                features: this.aggregatedFeatures,
+                sidebarCode: !this.uiSent ? this.getSidebarCode() : null // Plan envoyé 1 seule fois
+            };
+            
+            this.sendReportToApp(payload).then(() => {
+                if (payload.sidebarCode) this.uiSent = true;
+            });
+        }, 20);
+    };
+
+    // 👂 Écoute des Employés
+    window.addEventListener('message', (e) => {
+        if (!e.data) return;
+        
+        if (e.data.type === 'SW_INFO') {
+            // Un employé donne ses infos : on les note !
+            if (e.data.media !== undefined && e.data.media !== null) this.aggregatedMedia = e.data.media;
+            if (e.data.features) this.aggregatedFeatures = { ...this.aggregatedFeatures, ...e.data.features };
+        }
+        
+        if (e.data.type === 'SW_TRIGGER_SYNC') {
+            // Un employé a subi une action humaine : Alarme globale !
+            forceSync();
+        }
+    });
+
+    // 📡 Ordres venant de Tauri (React)
+    this.listenToApp((cmd, data) => {
+        if (cmd === 'APPLY_STATE') {
+
+            if (data.media) {
+                this.applyBaseState(data.media);
+            }
+            // Le Top ne touche pas la vidéo, il relaie l'ordre aux iframes
+            document.querySelectorAll('iframe').forEach(f => {
+                f.contentWindow?.postMessage({ type: 'SW_APPLY_STATE', payload: data }, '*');
+            });
+        }
+        forceSync(); // On force une mise à jour pour que React voit que l'ordre est passé
+    });
+
+    // ☠️ LE TESTAMENT (Quand la page se rafraîchit ou se ferme)
+    window.addEventListener('pagehide', () => {
+        // 1. On annule tout envoi qui était prévu dans les 20ms
+        if (this.syncTimeout) clearTimeout(this.syncTimeout);
+        
+        // 2. On envoie un paquet de la mort (media: null force le mode IDLE)
+        this.sendReportToApp({
+            media: null, 
+            features: { title: 'Navigation en cours...' }, // Optionnel, pour faire joli
+            sidebarCode: null
+        }).catch(() => {}); // On met un catch silencieux car la page est en train de mourir
+    });
+
+    // ⏱️ Routine de sécurité (au cas où rien ne bouge, garantit la détection de l'IDLE)
+    setInterval(() => forceSync(), 1000);
+
+    forceSync();
+
+  }
+
+  // 🎥 LES EMPLOYÉS (Iframes)
+  initIframeSensor() {
+    const sendToTop = () => {
+        window.top.postMessage({
+            type: 'SW_INFO',
+            media: this.getBaseState(),
+            features: this.getCustomState()
+        }, '*');
+    };
+
+    // 👂 Écoute du Patron ou de Tauri
+    window.addEventListener('message', (e) => {
+        if (!e.data) return;
+        
+        if (e.data.type === 'SW_FORCE_UPDATE') {
+            sendToTop(); // Le patron exige un rapport immédiat
+        }
+        
+        if (e.data.type === 'SW_APPLY_STATE') {
+            // Ordre de Play/Pause venant de React
+            if (e.data.payload && e.data.payload.media) {
+                this.applyBaseState(e.data.payload.media);
+            }
+        }
+    });
+
+    // 🖱️ Clic humain n'importe où dans l'iframe
+    // window.addEventListener('click', () => {
+    //     window.top.postMessage({ type: 'SW_TRIGGER_SYNC' }, '*');
+    // });
+
+    // ⏱️ Routine locale (optionnelle, le Top interroge déjà toutes les secondes)
+    // setInterval(sendToTop, 1000);
+
+    sendToTop();
+  }
+
+
+  // --- 🎨 GÉNÉRATEURS DE L'INTERFACE REACT (Côté Web) ---
 
   renderBadgeCode(pluginName, headerExtra) {
     return `React.createElement('div', { key: 'badge', className: 'flex items-center gap-3 mb-6' }, [
       React.createElement('div', { key: 'dot', className: 'w-1.5 h-1.5 rounded-full ' + (isPaused ? 'bg-white/10' : 'bg-emerald-500 animate-pulse') }),
       React.createElement('span', { key: 'name', className: 'text-[10px] font-black text-white/20 uppercase tracking-[0.4em]' }, "${pluginName}"),
-      ${headerExtra} // headerExtra doit déjà avoir une key s'il renvoie un tableau
+      ${headerExtra}
     ])`;
   }
 
@@ -195,7 +282,7 @@ class BaseSyncPlugin extends SyncWatchCore {
     ])`;
   }
 
-  // --- INTERFACE PRINCIPALE (AVEC VIDÉO) ---
+  // --- L'INTERFACE UNIFIÉE DE RÉACT (L'Arbre Conditionnel) ---
   getSidebarCode() {
     const pluginName = this.name;
     const classes = this.getContainerClasses();
@@ -210,35 +297,36 @@ class BaseSyncPlugin extends SyncWatchCore {
     const footerExtra = this.getFooterExtra();
 
     return `(props) => {
-      const { time = 0, duration = 0, paused = true, features = {} } = props;
-      const isPaused = paused;
+      const { media, features = {} } = props;
+      
+      // 🧠 L'Intelligence d'affichage
+      const isIdle = !media;
+      const isAd = !!features.isAd;
+      const isWatch = media && !isAd;
 
+      const time = media?.time || 0;
+      const duration = media?.duration || 0;
+      const isPaused = media ? media.paused : true;
+
+      // 🎣 HOOKS (Appelés inconditionnellement)
       const [isDragging, setIsDragging] = React.useState(false);
       const [localTime, setLocalTime] = React.useState(time);
 
-      // 🔄 1. LE RECALIBRAGE (Gestion du Heartbeat de 3.5s)
       React.useEffect(() => {
+        if (!media) return;
         if (!isDragging) {
-            // Si le décalage entre le temps autonome de React et le vrai temps de la vidéo
-            // est supérieur à 1 seconde, on force React à se recaler sur la vraie vidéo.
-            // (Si le décalage est minime, on ignore pour éviter les micro-saccades visuelles)
-            setLocalTime(prev => Math.abs(prev - time) > 1 ? time : prev);
+            setLocalTime(prev => Math.abs(prev - time) > 0 ? time : prev);
         }
-      }, [time, isDragging]);
+      }, [time, isDragging, media]);
 
-      // 🏎️ 2. LE MOTEUR AUTONOME (L'animation ultra fluide)
       React.useEffect(() => {
+        if (!media) return;
         let interval;
-        // Si la vidéo n'est pas en pause et que l'utilisateur ne touche pas au slider...
         if (!isPaused && !isDragging) {
-            // ... React fait avancer le temps tout seul de 0.1s toutes les 100ms !
-            interval = setInterval(() => {
-                setLocalTime(prev => prev + 0.1);
-            }, 100);
+            interval = setInterval(() => setLocalTime(prev => prev + 0.1), 100);
         }
-        // On nettoie l'intervalle quand on fait pause ou qu'on démonte le composant
         return () => clearInterval(interval);
-      }, [isPaused, isDragging]);
+      }, [isPaused, isDragging, media]);
 
       const formatTime = (s) => {
         if (!s || isNaN(s)) return "00:00";
@@ -250,41 +338,38 @@ class BaseSyncPlugin extends SyncWatchCore {
 
       const progress = duration > 0 ? (localTime / duration) * 100 : 0;
 
+      // 🌳 L'ARBRE UNIQUE
       return React.createElement('div', { 
-        key: 'main-container',
-        className: 'flex flex-col items-center justify-center w-full h-[85vh] p-10 gap-8 animate-in fade-in duration-1000 ' + '${classes}'
+        className: 'flex flex-col items-center justify-center w-full h-[85vh] p-10 gap-8 animate-in fade-in duration-500 ' + '${classes}'
       }, [
+        // TOUJOURS LÀ
         ${badge},
         ${contentTop},
-        ${timer},
-        ${playBtn},
-        ${contentBottom},
-        ${slider},
-        ${footerExtra}
-      ]);
-    }`;
-  }
 
-  // --- INTERFACE ALTERNATIVE (SANS VIDÉO) ---
-  getIdleSidebarCode() {
-    const pluginName = this.name;
-    const classes = this.getContainerClasses();
-    return `() => {
-      return React.createElement('div', { 
-        key: 'idle-container',
-        className: 'flex flex-col items-center justify-center w-full h-[85vh] p-10 gap-8 animate-in fade-in duration-1000 ' + '${classes}'
-      }, [
-        React.createElement('div', { key: 'badge', className: 'flex items-center gap-3 mb-6' }, [
-            React.createElement('div', { key: 'dot', className: 'w-1.5 h-1.5 rounded-full bg-slate-500 animate-pulse' }),
-            React.createElement('span', { key: 'name', className: 'text-[10px] font-black text-white/20 uppercase tracking-[0.4em]' }, "${pluginName}")
-        ]),
-        React.createElement('div', { key: 'loading', className: 'flex flex-col items-center gap-4 opacity-50' }, [
+        // ETAT 1 : IDLE
+        isIdle ? React.createElement('div', { key: 'idle-box', className: 'flex flex-col items-center gap-4 opacity-50 my-10 animate-in fade-in' }, [
             React.createElement('svg', { key: 'icon', className: 'w-16 h-16 text-white/20', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2' }, [
                 React.createElement('circle', { key: 'c', cx: '11', cy: '11', r: '8' }),
                 React.createElement('line', { key: 'l', x1: '21', y1: '21', x2: '16.65', y2: '16.65' })
             ]),
-            React.createElement('span', { key: 'txt', className: 'text-xs font-bold text-white uppercase tracking-widest animate-pulse' }, 'Navigation en cours...')
-        ])
+            React.createElement('span', { key: 'txt', className: 'text-xs font-bold text-white uppercase tracking-widest animate-pulse mt-4 text-center' }, 'En attente de vidéo...')
+        ]) : null,
+
+        // ETAT 2 : PUBLICITÉ
+        isAd ? React.createElement('div', { key: 'ad-box', className: 'my-10 animate-pulse animate-in fade-in' }, [
+            React.createElement('span', { className: 'text-xl font-black text-red-500 tracking-widest' }, 'PUBLICITÉ EN COURS')
+        ]) : null,
+
+        // ETAT 3 : LECTURE
+        isWatch ? React.createElement('div', { key: 'watch-box', className: 'flex flex-col items-center w-full gap-4 animate-in fade-in zoom-in-95' }, [
+            ${timer},
+            ${playBtn},
+            ${slider}
+        ]) : null,
+
+        // TOUJOURS LÀ
+        ${contentBottom},
+        ${footerExtra}
       ]);
     }`;
   }

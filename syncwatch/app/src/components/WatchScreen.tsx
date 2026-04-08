@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { VideoView } from './VideoView';
+import { SyncEngine } from './SyncEngine';
 import { Crown, LogOut, Radio, Cpu, Square } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -14,58 +14,48 @@ interface Props {
 }
 
 export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave, onStop }) => {
-  const [mediaState, setMediaState] = useState<any>({});
+  // 1. Les états bruts
+  const [mediaState, setMediaState] = useState<any>(null); // Null par défaut (IDLE)
   const [featuresState, setFeaturesState] = useState<any>({});
   
-  const [IdleUI, setIdleUI] = useState<React.FC<any> | null>(null);
-  const [WatchUI, setWatchUI] = useState<React.FC<any> | null>(null);
-  const [currentMode, setCurrentMode] = useState<'IDLE'|'WATCH'>('IDLE');
-  
-  const lastCodes = useRef<{IDLE: string|null, WATCH: string|null}>({IDLE: null, WATCH: null});
+  // 2. Le composant unique du plugin
+  const [PluginUI, setPluginUI] = useState<React.FC<any> | null>(null);
+  const lastCode = useRef<string | null>(null);
 
-const handleUpdate = useCallback((payload: any) => {
-    const mode = payload.mode as 'IDLE' | 'WATCH';
+  const handleUpdate = useCallback((payload: any) => {
+    // Plus aucune notion de 'mode' ! Le shell s'en fiche.
     const { media, features, sidebarCode } = payload;
-    
-    // 1. On applique le mode bêtement (ce que le serveur/plugin décide)
-    setCurrentMode(mode);
 
-    // 2. On met à jour les données
-    if (media) setMediaState(media);
+    // Mise à jour de la météo (Données brutes)
+    // Si media est undefined ou null, on force null
+    setMediaState(media || null);
     if (features) setFeaturesState((prev: any) => ({ ...prev, ...features }));
 
-    // 3. On compile l'UI si on reçoit un nouveau code
-    if (sidebarCode && sidebarCode !== lastCodes.current[mode]) {
+    // Compilation de l'interface SI on reçoit un nouveau plan de construction
+    if (sidebarCode && sidebarCode !== lastCode.current) {
         try {
             const factory = new Function('React', `return ${sidebarCode}`);
-            const Component = factory(React);
-            
-            if (mode === 'WATCH') setWatchUI(() => Component);
-            else setIdleUI(() => Component);
-            
-            lastCodes.current[mode] = sidebarCode;
-            console.log(`[SyncWatch] ✅ ${mode} UI compilé avec succès`);
+            setPluginUI(() => factory(React));
+            lastCode.current = sidebarCode;
+            console.log(`[SyncWatch] ✅ UI unifiée du plugin compilée avec succès`);
         } catch (e) {
-            console.error(`[SyncWatch] ⚠️ Échec de compilation (${mode}):`, e);
+            console.error(`[SyncWatch] ⚠️ Échec de compilation :`, e);
         }
     }
-}, []);
+  }, []);
 
-  const PluginUI = currentMode === 'WATCH' ? WatchUI : IdleUI;
-
-  // LA VERSION INSTANTANÉE
   const handleControl = useCallback((command: string, data: any) => {
-      // 1. On envoie l'ordre à la vidéo (Tauri)
+      // Envoi au backend (Tauri)
       invoke('playback_control', { command, data }).catch(console.error);
 
-      // 2. NOUVEAU : Mise à jour optimiste (React) !
+      // Mise à jour optimiste dans React (instantanéité visuelle)
       if (command === 'APPLY_STATE' && data.media) {
           setMediaState((prev: any) => ({ ...prev, ...data.media }));
       }
   }, []);
 
   return (
-    <div className="flex flex-col h-screen w-full bg-gradient-to-b from-[#0f172a] via-[#020617] to-[#020617] text-slate-200 border-r border-white/5 shadow-2xl overflow-hidden font-sans select-none">
+    <div className="relative flex flex-col h-screen w-full bg-gradient-to-b from-[#0f172a] via-[#020617] to-[#020617] text-slate-200 border-r border-white/5 shadow-2xl overflow-hidden font-sans select-none">
       
       {/* ── HEADER ── */}
       <div className="px-5 py-4 bg-white/[0.02] border-b border-white/5 flex items-center justify-between shrink-0 backdrop-blur-md">
@@ -109,12 +99,11 @@ const handleUpdate = useCallback((payload: any) => {
         <span className="font-mono text-[11px] text-indigo-400 font-black tracking-tight">{roomId}</span>
       </div>
 
-      {/* ── MAIN CONTENT (The Shell) ── */}
+      {/* ── MAIN CONTENT (The Dumb Shell) ── */}
       <div className="flex-1 flex flex-col items-center justify-center overflow-hidden">
         {PluginUI ? (
-            <div className="w-full h-full animate-in fade-in zoom-in duration-700 flex flex-col">
-                {/* Injecte sendControl ici ! */}
-                <PluginUI {...mediaState} features={featuresState} sendControl={handleControl} />
+            <div className="w-full h-full flex flex-col">
+                <PluginUI media={mediaState} features={featuresState} sendControl={handleControl} />
             </div>
         ) : (
           <div className="flex flex-col items-center gap-6 opacity-10">
@@ -124,7 +113,7 @@ const handleUpdate = useCallback((payload: any) => {
         )}
       </div>
 
-      <VideoView
+      <SyncEngine
         roomId={roomId}
         isHost={isHost}
         onUpdate={handleUpdate}

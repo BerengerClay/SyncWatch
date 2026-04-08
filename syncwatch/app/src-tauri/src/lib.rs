@@ -174,7 +174,6 @@ fn update_layout(app: &AppHandle) {
     if let Some(window) = app.get_window("main") {
         let physical = window.inner_size().unwrap();
         let logical = physical.to_logical::<f64>(window.scale_factor().unwrap_or(1.0));
-        println!("[SyncWatch] update_layout: logical_w={}, logical_h={}", logical.width, logical.height);
         
         if let Some(sidebar) = app.get_webview("sidebar") {
             if let Some(player) = app.get_webview("player") {
