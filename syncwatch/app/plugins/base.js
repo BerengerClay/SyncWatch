@@ -10,8 +10,6 @@ class BaseSyncPlugin extends SyncWatchCore {
     this.aggregatedMedia = null;
     this.aggregatedFeatures = {};
     this.syncTimeout = null;
-    this.lastSentFullState = null;
-    this.pendingManualTrigger = false;
   }
 
   // --- 🛠️ HOOKS À SURCHARGER (Dans tf1.js, youtube.js...) ---
@@ -101,84 +99,40 @@ class BaseSyncPlugin extends SyncWatchCore {
     window === window.top ? this.initTopMaster() : this.initIframeSensor();
   }
 
-  getIncrementalDiff(newState, oldState) {
-      if (!oldState) return newState;
-      const rules = this.getSyncRules();
-      const diff = {};
-      let hasChanged = false;
-
-      const compareRecursive = (newObj, oldObj, currentPath = '') => {
-          const patch = {};
-          let subChanged = false;
-
-          for (const key in newObj) {
-              const path = currentPath ? `${currentPath}.${key}` : key;
-              const valNew = newObj[key];
-              const valOld = oldObj ? oldObj[key] : undefined;
-
-              if (rules[path]?.type === 'CONTINUOUS') continue;
-
-              if (valNew !== null && typeof valNew === 'object') {
-                  const subPatch = compareRecursive(valNew, valOld, path);
-                  if (subPatch) { patch[key] = subPatch; subChanged = true; }
-              } 
-              else if (valNew !== valOld) {
-                  patch[key] = valNew;
-                  subChanged = true;
-              }
-          }
-          return subChanged ? patch : null;
-      };
-
-      return compareRecursive(newState, oldState);
-  }
-
   initTopMaster() {
     if (window.swInitDone) return;
     window.swInitDone = true;
 
     const forceSync = (isManualTrigger = false) => {
-        // 1. On mémorise l'urgence. Si un seul événement est manuel, tout le paquet devient urgent.
-        if (isManualTrigger) {
-            this.pendingManualTrigger = true;
-        }
-
-        // On annule l'envoi précédent si un nouvel événement arrive très vite
         if (this.syncTimeout) clearTimeout(this.syncTimeout);
         
-        // 2. Le calcul se fait AU MOMENT de l'envoi, pas avant
         this.syncTimeout = setTimeout(() => {
             const currentState = {
-                media: this.getBaseState(),
-                features: this.scrapeTopData(),
+                media: this.aggregatedMedia || this.getBaseState(),
+                features: { ...this.scrapeTopData(), ...(this.aggregatedFeatures || {}) },
                 url: window.location.href
             };
 
-            const patch = this.getIncrementalDiff(currentState, this.lastSentFullState);
-            
-            // 🚨 C'est une priorité si on a cliqué OU s'il y a un vrai changement
-            const isPriority = this.pendingManualTrigger || patch !== null;
-
-            if (isPriority) {
-                // On met à jour l'historique seulement au moment d'envoyer l'action
-                this.lastSentFullState = JSON.parse(JSON.stringify(currentState));
+            // 🛡️ Si pas de média, on vide les features (Anti-Ghost)
+            if (!currentState.media) {
+                currentState.features = null;
             }
+
+            // 2. Interrogation des Iframes pour rafraîchir l'agrégation
+            document.querySelectorAll('iframe').forEach(f => {
+                f.contentWindow?.postMessage({ type: 'SW_FORCE_UPDATE' }, '*');
+            });
 
             const packet = {
                 ts: Date.now(),
-                isPriority: isPriority,
-                // On envoie le patch. Si le patch est null (ex: le DOM a été trop lent), on envoie l'état complet par sécurité.
-                data: isPriority ? (patch || currentState) : currentState, 
-                fullState: currentState,
+                isManualTrigger: isManualTrigger, // On dit juste s'il y a eu une action humaine
+                fullState: currentState,          // On envoie toujours tout au Shell
                 sidebarCode: !this.uiSent ? this.getSidebarCode() : null,
                 syncRules: !this.uiSent ? this.getSyncRules() : null
             };
             
             this.sendReportToApp(packet).then(() => { if (packet.sidebarCode) this.uiSent = true; });
-            
-            // 3. On réinitialise la mémoire une fois le colis parti
-            this.pendingManualTrigger = false;
-        }, 50); // J'ai monté à 50ms pour regrouper parfaitement le clic et l'événement DOM de la vidéo
+        }, 50); 
     };
 
     window.addEventListener('message', (e) => {

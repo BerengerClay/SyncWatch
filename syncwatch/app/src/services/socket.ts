@@ -1,7 +1,7 @@
 import { io } from 'socket.io-client';
 
 // Connecter directement au serveur Node.js sur le port 3001
-export const socket = io('https://syncwatch-server.beclay.fr', {
+export const socket = io('http://localhost:3001', {
     transports: ['websocket'],
     autoConnect: true,
     reconnection: true

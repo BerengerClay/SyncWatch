@@ -3,7 +3,7 @@ import { listenToServer, socket } from '../services/socket';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 
-// --- HELPERS AGNOSTIQUES ---
+// --- HELPERS ---
 const getValue = (obj: any, path: string) => path.split('.').reduce((acc, part) => acc && acc[part], obj);
 const setValue = (obj: any, path: string, value: any) => {
     const parts = path.split('.');
@@ -15,55 +15,89 @@ const setValue = (obj: any, path: string, value: any) => {
     current[parts[parts.length - 1]] = value;
 };
 
+const deepMerge = (target: any, source: any): any => {
+    const isObject = (item: any) => item && typeof item === 'object' && !Array.isArray(item);
+    if (!isObject(target) || !isObject(source)) return source;
+    const output = { ...target };
+    Object.keys(source).forEach(key => {
+        if (isObject(source[key])) {
+            if (!(key in target)) output[key] = source[key];
+            else output[key] = deepMerge(target[key], source[key]);
+        } else {
+            output[key] = source[key];
+        }
+    });
+    return output;
+};
+
+// 🛠️ NOUVEAU : Le Diffing est maintenant dans le réseau !
+const getIncrementalDiff = (newObj: any, oldObj: any, rules: any, currentPath = ''): any => {
+    if (!oldObj) return newObj;
+    const patch: any = {};
+    let hasChanged = false;
+
+    for (const key in newObj) {
+        const path = currentPath ? `${currentPath}.${key}` : key;
+        const valNew = newObj[key];
+        const valOld = oldObj[key];
+
+        if (rules && rules[path]?.type === 'CONTINUOUS') continue;
+
+        if (valNew !== null && typeof valNew === 'object' && !Array.isArray(valNew)) {
+            const subPatch = getIncrementalDiff(valNew, valOld, rules, path);
+            if (subPatch) { patch[key] = subPatch; hasChanged = true; }
+        } else if (valNew !== valOld) {
+            patch[key] = valNew;
+            hasChanged = true;
+        }
+    }
+    return hasChanged ? patch : null;
+};
+
 export const SyncEngine: React.FC<{ isHost: boolean, onUpdate: (p: any) => void }> = ({ isHost, onUpdate }) => {
   const isSyncing = useRef(false);
   const rulesRef = useRef<Record<string, any> | null>(null);
+  const lastStateRef = useRef<any>(null); // 🧠 Mémoire du dernier envoi réseau
 
   useEffect(() => {
-    // --- SyncEngine.tsx ---
     const unlistenTauri = listen('player-update', (event: any) => {
       if (isSyncing.current) return;
-      const { isPriority, ts, data, fullState, syncRules } = event.payload;
-      if (!data) return;
+      const { ts, isManualTrigger, fullState, sidebarCode, syncRules } = event.payload;
+      if (!fullState) return;
 
-      // 1. Administration des règles (Séparé)
+      // 1. Administration des règles
       if (syncRules && !rulesRef.current) {
-          rulesRef.current = syncRules; // TOUT LE MONDE mémorise les règles (Host et Guests)
-          if (isHost) {
-              socket.emit('SET_SYNC_RULES', syncRules); // SEUL le Host configure le serveur
-          }
+          rulesRef.current = syncRules;
+          if (isHost) socket.emit('SET_SYNC_RULES', syncRules);
       }
 
-      // --- Dans SyncEngine.tsx ---
+      // 2. Le Cerveau : Calcul de la priorité et du patch
+      const patch = getIncrementalDiff(fullState, lastStateRef.current, rulesRef.current);
+      const isPriority = isManualTrigger || patch !== null;
 
       if (isPriority) {
-          socket.emit('SEND_ACTION', { ts, data });
+          // ACTION : On met à jour la mémoire et on envoie le patch
+          lastStateRef.current = JSON.parse(JSON.stringify(fullState));
+          socket.emit('SEND_ACTION', { ts, data: patch || fullState });
       } else {
+          // HEARTBEAT : On extrait juste le continu
           const minimalistData: any = {};
-          
           if (rulesRef.current) {
               Object.keys(rulesRef.current).forEach(path => {
-                  // 🎯 NOUVEAUTÉ : On n'inclut que le CONTINU dans le heartbeat
-                  // Le DISCRET (paused, rate) attendra la prochaine ACTION pour être envoyé
                   if (rulesRef.current![path].type === 'CONTINUOUS') {
-                      const val = getValue(data, path);
-                      if (val !== undefined && val !== null) {
-                          setValue(minimalistData, path, val);
-                      }
+                      const val = getValue(fullState, path);
+                      if (val !== undefined && val !== null) setValue(minimalistData, path, val);
                   }
               });
           }
-          
-          // Si la vidéo est en pause, minimalistData sera peut-être vide.
-          // C'est parfait : on n'enverra que le "ts" pour dire qu'on est en vie.
           socket.emit('SEND_HEARTBEAT', { ts, data: minimalistData });
       }
 
+      // 3. Mise à jour de l'UI avec tout le paquet
       const uiPayload = {
-        ...event.payload,        // Récupère ts, isPriority, sidebarCode, syncRules
-        ...(fullState || data)   // Déballe media et features pour que props.media fonctionne
+        ...event.payload,
+        ...fullState
       };
-      
       onUpdate(uiPayload);
     });
 
@@ -71,6 +105,8 @@ export const SyncEngine: React.FC<{ isHost: boolean, onUpdate: (p: any) => void 
       if (data.type === 'SYNC_ORDER' || data.type === 'JOIN_SUCCESS') {
         const state = data.initialState || data;
         isSyncing.current = true;
+        // Optionnel : on met aussi à jour la mémoire locale quand on reçoit un ordre
+        lastStateRef.current = deepMerge(lastStateRef.current || {}, state);
         invoke('playback_control', { command: 'APPLY_STATE', data: state });
         onUpdate(state);
         setTimeout(() => { isSyncing.current = false; }, 800);
