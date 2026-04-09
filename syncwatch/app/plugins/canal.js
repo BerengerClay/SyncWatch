@@ -34,7 +34,7 @@ class CanalPlusPlugin extends BaseSyncPlugin {
                 WebkitBoxOrient: 'vertical',
                 overflow: 'hidden'
             }
-        }, features.title || 'Programme Canal+')
+        }, features?.title || 'Programme Canal+')
       ])
     `;
   }
@@ -44,28 +44,17 @@ class CanalPlusPlugin extends BaseSyncPlugin {
       React.createElement('button', {
         key: 'playlist-btn',
         onClick: () => {
-            props.sendControl('ADD_TO_PLAYLIST', {}); // ✅ Parfait, propre !
+            props.sendControl('ADD_TO_PLAYLIST', {});
         },
         className: 'mt-2 px-6 py-3 bg-white/10 hover:bg-white/20 border border-white/5 rounded-full text-[10px] font-black text-white uppercase tracking-[0.2em] transition-all duration-300 backdrop-blur-md'
       }, 'Ajouter à ma playlist')
     `;
   }
 
-  // 🔥 LA NOUVELLE LOGIQUE PROPRE
   handleCustomCommand(cmd, data) {
     if (cmd === 'ADD_TO_PLAYLIST') {
-        console.log("[SyncWatch] ➕ Ajout à la playlist Canal+...");
-        const btn = document.querySelector('button[aria-label*="playlist"]') 
-                 || document.querySelector('.detailV5__actionLayout button')
-                 || document.querySelector('li:nth-child(2) > div > button');
+        const btn = document.querySelector('button[aria-label*="playlist"]');
         if (btn) btn.click();
-    }
-  }
-
-  report() {
-    const hasVideo = !!this.getVideo();
-    if (window === window.top || hasVideo) {
-      super.report();
     }
   }
 }

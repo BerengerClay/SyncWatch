@@ -13,7 +13,7 @@ export const listenToServer = (callback: (data: any) => void) => {
     // Liste des événements que le serveur émet
     const events = [
         'ROOM_CREATED', 'JOIN_SUCCESS', 'CHAT_MSG', 'USER_JOINED', 'USER_LEFT',
-        'SYNC_STATE'
+        'SYNC_STATE', 'SYNC_ORDER'
     ];
     
     const handler = (event: string, data: any) => {

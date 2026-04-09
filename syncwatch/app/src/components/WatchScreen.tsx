@@ -16,7 +16,7 @@ interface Props {
 export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave, onStop }) => {
   // 1. Les états bruts
   const [mediaState, setMediaState] = useState<any>(null); // Null par défaut (IDLE)
-  const [featuresState, setFeaturesState] = useState<any>({});
+  const [featuresState, setFeaturesState] = useState<any>(null);
   
   // 2. Le composant unique du plugin
   const [PluginUI, setPluginUI] = useState<React.FC<any> | null>(null);
@@ -25,23 +25,19 @@ export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave, onStop }
   const handleUpdate = useCallback((payload: any) => {
     const { media, features, sidebarCode } = payload;
 
-    // 🧠 FUSION INTELLIGENTE DES MÉDIAS
-    if (media) {
+    // 🧠 GESTION DE L'ÉTAT (IDLE ou ACTIVE)
+    if (media === null) {
+      setMediaState(null);
+      setFeaturesState(null); // Cohérence avec media: null
+    } else if (media) {
       setMediaState((prev: any) => {
-        // Si on n'avait rien avant, on prend le nouveau
         if (!prev) return media;
-        
-        // Sinon, on fusionne ! 
-        // On garde tout de 'prev', on ecrase avec 'media'
-        return {
-          ...prev,
-          ...media
-        };
+        return { ...prev, ...media };
       });
     }
 
-    // Idem pour les features (déjà correct dans ton code, mais on peut sécuriser)
-    if (features) {
+    // Mise à jour des features (uniquement si on n'est pas en train de passer en IDLE)
+    if (media !== null && features && Object.keys(features).length > 0) {
       setFeaturesState((prev: any) => ({ ...prev, ...features }));
     }
 
@@ -116,7 +112,11 @@ export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave, onStop }
       <div className="flex-1 flex flex-col items-center justify-center overflow-hidden">
         {PluginUI ? (
             <div className="w-full h-full flex flex-col">
-                <PluginUI media={mediaState} features={featuresState} sendControl={handleControl} />
+                <PluginUI 
+                  media={mediaState} 
+                  features={featuresState} 
+                  sendControl={handleControl} 
+                />
             </div>
         ) : (
           <div className="flex flex-col items-center gap-6 opacity-10">

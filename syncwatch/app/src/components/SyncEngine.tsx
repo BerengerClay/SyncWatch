@@ -3,88 +3,82 @@ import { listenToServer, socket } from '../services/socket';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 
-interface Props {
-  roomId: string;
-  isHost: boolean;
-  onUpdate: (payload: any) => void;
-}
+// --- HELPERS AGNOSTIQUES ---
+const getValue = (obj: any, path: string) => path.split('.').reduce((acc, part) => acc && acc[part], obj);
+const setValue = (obj: any, path: string, value: any) => {
+    const parts = path.split('.');
+    let current = obj;
+    for (let i = 0; i < parts.length - 1; i++) {
+        if (!current[parts[i]]) current[parts[i]] = {};
+        current = current[parts[i]];
+    }
+    current[parts[parts.length - 1]] = value;
+};
 
-export const SyncEngine: React.FC<Props> = ({ isHost, onUpdate }) => {
+export const SyncEngine: React.FC<{ isHost: boolean, onUpdate: (p: any) => void }> = ({ isHost, onUpdate }) => {
   const isSyncing = useRef(false);
-  // On mémorise le dernier état envoyé pour comparer
-  const lastSentState = useRef<{paused: boolean, time: number}>({ paused: false, time: 0 });
+  const rulesRef = useRef<Record<string, any> | null>(null);
 
   useEffect(() => {
-    let unlistenTauri: (() => void) | undefined;
-    
-    const setupTauriListener = async () => {
-      try {
-        unlistenTauri = await listen('player-update', (event: any) => {
-          if (isSyncing.current) return;
+    // --- SyncEngine.tsx ---
+    const unlistenTauri = listen('player-update', (event: any) => {
+      if (isSyncing.current) return;
+      const { isPriority, ts, data, fullState, syncRules } = event.payload;
+      if (!data) return;
 
-          const fullState = event.payload;
-          if (!fullState || !fullState.media) return;
-
-          const newPaused = fullState.media.paused;
-          const newTime = fullState.media.currentTime;
-
-          // --- FILTRE INTELLIGENT ---
-          let shouldBroadcast = false;
-
+      // 1. Administration des règles (Séparé)
+      if (syncRules && !rulesRef.current) {
+          rulesRef.current = syncRules; // TOUT LE MONDE mémorise les règles (Host et Guests)
           if (isHost) {
-            // Le Host arrose toujours pour maintenir la synchro
-            shouldBroadcast = true;
-          } else {
-            // Le Guest ne parle que s'il se passe un truc important :
-            const hasStatusChanged = newPaused !== lastSentState.current.paused;
-            const hasJumped = Math.abs(newTime - lastSentState.current.time) > 2; // Saut de plus de 2s
-
-            if (hasStatusChanged || hasJumped) {
-              shouldBroadcast = true;
-            }
+              socket.emit('SET_SYNC_RULES', syncRules); // SEUL le Host configure le serveur
           }
+      }
 
-          if (shouldBroadcast) {
-            socket.emit('BROADCAST_STATE', { payload: fullState, debugId: Math.random() });
-            // On met à jour notre mémoire
-            lastSentState.current = { paused: newPaused, time: newTime };
+      // --- Dans SyncEngine.tsx ---
+
+      if (isPriority) {
+          socket.emit('SEND_ACTION', { ts, data });
+      } else {
+          const minimalistData: any = {};
+          
+          if (rulesRef.current) {
+              Object.keys(rulesRef.current).forEach(path => {
+                  // 🎯 NOUVEAUTÉ : On n'inclut que le CONTINU dans le heartbeat
+                  // Le DISCRET (paused, rate) attendra la prochaine ACTION pour être envoyé
+                  if (rulesRef.current![path].type === 'CONTINUOUS') {
+                      const val = getValue(data, path);
+                      if (val !== undefined && val !== null) {
+                          setValue(minimalistData, path, val);
+                      }
+                  }
+              });
           }
           
-          onUpdate(fullState);
-        });
-      } catch (err) {
-        console.error('[SyncEngine] Failed to setup Tauri listener:', err);
+          // Si la vidéo est en pause, minimalistData sera peut-être vide.
+          // C'est parfait : on n'enverra que le "ts" pour dire qu'on est en vie.
+          socket.emit('SEND_HEARTBEAT', { ts, data: minimalistData });
       }
-    };
-    setupTauriListener();
 
-    // SENS ENTRANT (inchangé)
+      const uiPayload = {
+        ...event.payload,        // Récupère ts, isPriority, sidebarCode, syncRules
+        ...(fullState || data)   // Déballe media et features pour que props.media fonctionne
+      };
+      
+      onUpdate(uiPayload);
+    });
+
     const unlistenSocket = listenToServer((data: any) => {
-      if (data.type === 'SYNC_STATE') {
-        const fullState = data.payload; 
-        if (!fullState) return;
-
+      if (data.type === 'SYNC_ORDER' || data.type === 'JOIN_SUCCESS') {
+        const state = data.initialState || data;
         isSyncing.current = true;
-        invoke('playback_control', { command: 'APPLY_STATE', data: fullState }).catch(console.error);
-        onUpdate(fullState);
-
-        // On met aussi à jour lastSentState pour ne pas renvoyer ce qu'on vient de recevoir
-        if (fullState.media) {
-            lastSentState.current = { 
-                paused: fullState.media.paused, 
-                time: fullState.media.currentTime 
-            };
-        }
-
-        setTimeout(() => { isSyncing.current = false; }, 1000);
+        invoke('playback_control', { command: 'APPLY_STATE', data: state });
+        onUpdate(state);
+        setTimeout(() => { isSyncing.current = false; }, 800);
       }
     });
 
-    return () => {
-        if (unlistenTauri) unlistenTauri();
-        if (typeof unlistenSocket === 'function') unlistenSocket();
-    };
-  }, [isHost, onUpdate]); // On rajoute isHost ici pour que le filtre s'adapte si le host change
+    return () => { unlistenTauri.then(u => u()); unlistenSocket(); };
+  }, [isHost, onUpdate]);
 
-  return null; 
+  return null;
 };
