@@ -114,41 +114,46 @@ async fn set_view_mode(app: AppHandle, mode: String, url: Option<String>) -> Res
     let main_window = app.get_window("main").ok_or("Fenêtre principale introuvable")?;
 
     match mode.as_str() {
-        "HOME" => {
-            if let Some(player) = app.get_webview_window("player") {
-                let _ = player.close();
+        "HOME" | "GROUP" => {
+            // 1. Fermer le player (si existant) - On essaie les deux types (Win/Mac vs Linux)
+            if let Some(player_win) = app.get_webview_window("player") {
+                let _ = player_win.close();
+            } else if let Some(player_webview) = app.get_webview("player") {
+                let _ = player_webview.close();
             }
+            // 2. Refresh le layout pour que la sidebar redevienne full wide
+            update_layout(&app);
         }
         "WATCH" => {
             if let Some(target_url) = url {
                 let parsed_url = tauri::WebviewUrl::External(url::Url::parse(&target_url).map_err(|e| e.to_string())?);
                 let full_script = get_plugin_script_for_url(&target_url);
 
-                // --- LOGIQUE SPÉCIFIQUE LINUX (Fenêtres séparées) ---
                 if cfg!(target_os = "linux") {
-                    // Si le player existe déjà, on le ferme avant d'en ouvrir un nouveau
                     if let Some(old_player) = app.get_webview_window("player") {
                         let _ = old_player.close();
                     }
-
-                    // On crée une vraie fenêtre indépendante
                     let _player_win = tauri::webview::WebviewWindowBuilder::new(&app, "player", parsed_url)
                         .title("SyncWatch Player")
-                        .inner_size(960.0, 540.0) // Taille par défaut
+                        .inner_size(960.0, 540.0)
                         .user_agent(WIN_UA)
                         .initialization_script(&full_script)
                         .build()
                         .map_err(|e| e.to_string())?;
                 } 
-                // --- LOGIQUE WINDOWS/MAC (On garde l'intégration si tu veux) ---
                 else {
+                    // Si un player existe déjà (changement de vidéo), on le ferme avant d'en recréer un
+                    if let Some(old_p) = app.get_webview("player") {
+                        let _ = old_p.close();
+                    }
+
                     let builder = tauri::webview::WebviewBuilder::new("player", parsed_url)
                         .user_agent(WIN_UA)
                         .initialization_script(&full_script);
 
                     let _ = main_window.add_child(
                         builder, 
-                        tauri::Position::Logical(tauri::LogicalPosition::new(350.0, 0.0)), 
+                        tauri::Position::Logical(tauri::LogicalPosition::new(SIDEBAR_WIDTH, 0.0)), 
                         tauri::Size::Logical(tauri::LogicalSize::new(800.0, 600.0))
                     ).map_err(|e| e.to_string())?;
                     
@@ -204,10 +209,11 @@ pub fn run() {
                 WebviewUrl::App("index.html".into()) 
             };
 
+            let initial_sidebar_width = if cfg!(target_os = "linux") { SIDEBAR_WIDTH } else { 1280.0 };
             let _sidebar = window.add_child(
                 WebviewBuilder::new("sidebar", sidebar_url).user_agent(WIN_UA),
                 Position::Logical(LogicalPosition::new(0.0, 0.0)),
-                Size::Logical(LogicalSize::new(SIDEBAR_WIDTH, 720.0)),
+                Size::Logical(LogicalSize::new(initial_sidebar_width, 720.0)),
             )?;
 
             let handle = app.app_handle().clone();

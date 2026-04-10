@@ -81,7 +81,7 @@ class BaseSyncPlugin extends SyncWatchCore {
     const v = this.getVideo();
     if (!v || !s) return;
 
-    if (Math.abs(v.currentTime - s.time) > 1.5) {
+    if (s.time !== undefined && Math.abs(v.currentTime - s.time) > 0.5) {
       v.currentTime = s.time;
     }
     
@@ -167,7 +167,7 @@ class BaseSyncPlugin extends SyncWatchCore {
         }).catch(() => {});
     });
 
-    setInterval(() => forceSync(false), 3000);
+    setInterval(() => forceSync(false), 1000);
     forceSync();
   }
 

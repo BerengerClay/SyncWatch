@@ -127,7 +127,6 @@ export const WatchScreen: React.FC<Props> = ({ roomId, isHost, onLeave, onStop }
       </div>
 
       <SyncEngine
-        roomId={roomId}
         isHost={isHost}
         onUpdate={handleUpdate}
       />

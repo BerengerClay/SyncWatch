@@ -58,10 +58,12 @@ export const SyncEngine: React.FC<{ isHost: boolean, onUpdate: (p: any) => void 
   const isSyncing = useRef(false);
   const rulesRef = useRef<Record<string, any> | null>(null);
   const lastStateRef = useRef<any>(null); // 🧠 Mémoire du dernier envoi réseau
+  const lastHeartbeatRef = useRef<number>(0); // ⏱️ Throttle pour les heartbeats réseau
 
   useEffect(() => {
     const unlistenTauri = listen('player-update', (event: any) => {
       if (isSyncing.current) return;
+      console.log('[SyncWatch] 📥 Report received:', event.payload);
       const { ts, isManualTrigger, fullState, sidebarCode, syncRules } = event.payload;
       if (!fullState) return;
 
@@ -79,25 +81,48 @@ export const SyncEngine: React.FC<{ isHost: boolean, onUpdate: (p: any) => void 
           // ACTION : On met à jour la mémoire et on envoie le patch
           lastStateRef.current = JSON.parse(JSON.stringify(fullState));
           socket.emit('SEND_ACTION', { ts, data: patch || fullState });
+          lastHeartbeatRef.current = Date.now(); // On reset le timer car l'action fait office de heartbeat
       } else {
-          // HEARTBEAT : On extrait juste le continu
-          const minimalistData: any = {};
-          if (rulesRef.current) {
-              Object.keys(rulesRef.current).forEach(path => {
-                  if (rulesRef.current![path].type === 'CONTINUOUS') {
-                      const val = getValue(fullState, path);
-                      if (val !== undefined && val !== null) setValue(minimalistData, path, val);
-                  }
-              });
+          // HEARTBEAT : On arrose le serveur à une fréquence réduite (ex: 5s)
+          const now = Date.now();
+          if (now - lastHeartbeatRef.current > 5000) {
+              const minimalistData: any = {};
+              if (rulesRef.current) {
+                  Object.keys(rulesRef.current).forEach(path => {
+                      const rule = rulesRef.current![path];
+                      
+                      if (rule.type === 'CONTINUOUS') {
+                          // 🧠 NOUVEAU : On vérifie si la valeur est censée bouger en ce moment
+                          let isActive = true;
+                          if (rule.activeIfKey) {
+                              const conditionValue = getValue(fullState, rule.activeIfKey);
+                              isActive = rule.activeInverted ? !conditionValue : !!conditionValue;
+                          }
+
+                          // 🎯 On n'envoie la donnée QUE si elle est active (en train de changer)
+                          if (isActive) {
+                              const val = getValue(fullState, path);
+                              if (val !== undefined && val !== null) {
+                                  setValue(minimalistData, path, val);
+                              }
+                          }
+                      }
+                  });
+              }
+              socket.emit('SEND_HEARTBEAT', { ts, data: minimalistData });
+              lastHeartbeatRef.current = now;
           }
-          socket.emit('SEND_HEARTBEAT', { ts, data: minimalistData });
       }
 
-      // 3. Mise à jour de l'UI avec tout le paquet
+      // 3. Mise à jour de l'UI (Nettoyé !)
+      // On extrait fullState, et on garde TOUT LE RESTE dans "restOfPayload"
+      const { fullState: _ignored, ...restOfPayload } = event.payload; 
+
       const uiPayload = {
-        ...event.payload,
-        ...fullState
+        ...restOfPayload, // Contient ts, sidebarCode, isManualTrigger...
+        ...fullState      // Étale media et features proprement à la racine
       };
+      
       onUpdate(uiPayload);
     });
 
