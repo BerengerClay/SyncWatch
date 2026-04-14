@@ -38,14 +38,20 @@ interface SyncRule {
     activeInverted?: boolean; // true si actif quand la clé est à false
 }
 
+interface Member {
+    id: string;
+    name: string;
+}
+
 interface Room {
     id: string;
     hostId: string;
-    members: string[];
+    members: Member[];
     state: any;
-    rules: Record<string, SyncRule>;
     lastUpdate: number;
 }
+
+
 
 const rooms: Map<string, Room> = new Map();
 
@@ -56,36 +62,60 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
         return roomId ? rooms.get(roomId) : null;
     };
 
-    socket.on('CREATE_ROOM', () => {
+    const broadcastMembers = (room: Room) => {
+        io.to(room.id).emit('MEMBERS_UPDATE', { members: room.members });
+    };
+
+
+
+    socket.on('CREATE_ROOM', ({ userName }: { userName: string }) => {
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-        const room: Room = { id: roomId, hostId: socket.id, members: [socket.id], state: {}, rules: {}, lastUpdate: Date.now() };
+        const room: Room = { 
+            id: roomId, 
+            hostId: socket.id, 
+            members: [{ id: socket.id, name: userName || 'Host' }], 
+            state: {
+                activeUrl: null,
+                activePluginId: null,
+                media: null,
+                features: null,
+                rules: {}
+            }, 
+            lastUpdate: Date.now()
+        };
+
         rooms.set(roomId, room);
         socket.join(roomId);
-        socket.emit('ROOM_CREATED', { roomId, hostId: socket.id });
+        socket.emit('ROOM_CREATED', { roomId, hostId: socket.id, members: room.members });
+        broadcastMembers(room);
     });
 
-    socket.on('JOIN_ROOM', (roomId: string) => {
+
+
+
+    socket.on('JOIN_ROOM', ({ roomId, userName }: { roomId: string, userName: string }) => {
         const room = rooms.get(roomId);
-        if (!room) return socket.emit('ERROR', 'Room not found');
+        if (!room) {
+            console.log(`[JOIN_ERROR] Room ${roomId} not found for user ${userName}`);
+            return socket.emit('ERROR', 'Room not found');
+        }
         
-        room.members.push(socket.id);
+        room.members.push({ id: socket.id, name: userName });
         socket.join(roomId);
         
-        // --- Dans roomHandler.ts (Bloc JOIN_ROOM) ---
-
         // Calcul du "Late Joiner Catch-up"
         const now = Date.now();
         const timeDiff = (now - room.lastUpdate) / 1000;
         const initialState = JSON.parse(JSON.stringify(room.state));
 
-        Object.keys(room.rules).forEach(path => {
-            const rule = room.rules[path];
+        const rules = room.state.rules || {};
+        Object.keys(rules).forEach(path => {
+            const rule = rules[path];
             if (rule.type === 'CONTINUOUS') {
                 const speed = rule.speedKey ? (getValue(room.state, rule.speedKey) || 1) : 1;
                 const active = rule.activeIfKey ? getValue(room.state, rule.activeIfKey) : true;
                 
                 if (rule.activeInverted ? !active : active) {
-                    // 🛡️ CORRECTION : On s'assure qu'on a une base valide avant d'extrapoler
                     const baseValue = getValue(room.state, path);
                     if (typeof baseValue === 'number') {
                         const extrapolated = baseValue + (timeDiff * speed);
@@ -95,34 +125,64 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
             }
         });
 
-        socket.emit('JOIN_SUCCESS', { roomId, hostId: room.hostId, initialState });
-        socket.to(roomId).emit('USER_JOINED', { userId: socket.id });
+
+        socket.emit('JOIN_SUCCESS', { 
+            roomId, 
+            hostId: room.hostId, 
+            initialState,
+            members: room.members
+        });
+
+
+
+        
+        broadcastMembers(room);
     });
 
-    socket.on('SET_SYNC_RULES', (rules: Record<string, SyncRule>) => {
-        const room = getRoom();
-        if (room && socket.id === room.hostId) room.rules = rules;
-    });
+
+
+
 
     // 📢 ACTION : Réception d'un Patch (Deep Diff)
     socket.on('SEND_ACTION', (packet: { ts: number, data: any }) => {
         const room = getRoom();
         if (!room || !packet.data) return;
 
-        // On fusionne proprement le patch dans l'état global
+        const isHost = socket.id === room.hostId;
+
+
+        // 🛡️ SÉCURITÉ : Seul l'Host peut modifier les règles de synchronisation
+        if (!isHost && packet.data.rules) {
+            delete packet.data.rules;
+        }
+
+        // 1. Mise à jour de la mémoire interne (Deep Merge de tout le patch)
         room.state = deepMerge(room.state, packet.data);
+
         room.lastUpdate = Date.now();
-        
-        // On diffuse l'état complet pour que tout le monde soit raccord
-        socket.to(room.id).emit('SYNC_ORDER', room.state);
-        console.log(`[SYNC] Action merged for room ${room.id}`);
+
+        // 2. Diffusion du DELTA (Relais pur)
+        socket.to(room.id).emit('SYNC_ORDER', packet.data);
+
+        console.log(`[SYNC] Action relayed for room ${room.id} (URL: ${room.state.activeUrl || 'none'})`);
+
+
+
+
     });
+
+
+    // 🧭 NAVIGATION : Ordre de changement de source (ex: cliquer sur YouTube sur la Remote)
+
+
+
 
     // 💓 HEARTBEAT : Vérification de dérive
     socket.on('SEND_HEARTBEAT', (packet: { ts: number, data: any }) => {
         const room = getRoom();
-        if (!room || !room.rules || !packet.data) return;
+        if (!room || !packet.data) return;
 
+        const rules = room.state.rules || {};
         const isHost = socket.id === room.hostId;
         const now = Date.now();
         const latency = packet.ts ? (now - packet.ts) / 1000 : 0;
@@ -139,8 +199,8 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
         let needsCorrection = false;
         const correction = JSON.parse(JSON.stringify(room.state));
 
-        Object.keys(room.rules).forEach(path => {
-            const rule = room.rules[path];
+        Object.keys(rules).forEach(path => {
+            const rule = rules[path];
             const sVal = getValue(room.state, path);
             const cVal = getValue(packet.data, path);
 
@@ -166,4 +226,26 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
 
         if (needsCorrection) socket.emit('SYNC_ORDER', correction);
     });
-};
+
+
+    socket.on('disconnecting', () => {
+        for (const roomId of socket.rooms) {
+            if (roomId !== socket.id) {
+                const room = rooms.get(roomId);
+                if (room) {
+                    room.members = room.members.filter(m => m.id !== socket.id);
+                    if (room.members.length === 0) {
+                        rooms.delete(roomId);
+                    } else {
+                        // Si le host part, on peut nommer un nouveau host ou juste vider ?
+                        // Pour l'instant on garde le hostId original ou on prend le suivant
+                        if (room.hostId === socket.id) {
+                            room.hostId = room.members[0].id;
+                        }
+                        broadcastMembers(room);
+                    }
+                }
+            }
+        }
+    });
+};

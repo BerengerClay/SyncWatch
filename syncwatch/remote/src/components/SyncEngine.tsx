@@ -78,6 +78,7 @@ export const SyncEngine: React.FC<{
           rulesRef.current = fullState.rules;
       }
 
+
       // 2. Le Cerveau : Calcul de la priorité et du patch
       const stateToDiff = { 
           ...fullState,
@@ -135,7 +136,6 @@ export const SyncEngine: React.FC<{
       
       onUpdate(uiPayload);
     });
-
 
     const unlistenSocket = listenToServer((data: any) => {
       if (data.type === 'MEMBERS_UPDATE') {

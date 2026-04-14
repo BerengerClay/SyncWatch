@@ -12,7 +12,6 @@ interface Props {
 
 
 
-
 interface Plugin {
   name: string;
   homepage: string;

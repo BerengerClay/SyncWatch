@@ -6,7 +6,7 @@ class YouTubePlugin extends BaseSyncPlugin {
 
   getCurrentUrl() {
     if (this.videoElement) {
-      return window.location.href;
+      return this.videoElement.src.replace('blob:', '');
     }
     return null;
   }

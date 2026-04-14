@@ -9,8 +9,24 @@ class BaseSyncPlugin extends SyncWatchCore {
     this.videoElement = null;
     this.aggregatedMedia = null;
     this.aggregatedFeatures = {};
+    this.lastUpdateTs = Date.now();
     this.syncTimeout = null;
   }
+
+  getCurrentEstimatedTime() {
+    if (!this.aggregatedMedia) return 0;
+    const time = this.aggregatedMedia.time || 0;
+    if (this.aggregatedMedia.paused) return time;
+    
+    const elapsed = (Date.now() - this.lastUpdateTs) / 1000;
+    const speed = this.aggregatedMedia.playbackRate || 1.0;
+    return time + (elapsed * speed);
+  }
+
+  getCurrentUrl() {
+    return window.location.href;
+  }
+
 
   // --- 🛠️ HOOKS À SURCHARGER (Dans tf1.js, youtube.js...) ---
   scrapeTopData() { return {}; }
@@ -28,7 +44,7 @@ class BaseSyncPlugin extends SyncWatchCore {
       'media.playbackRate': { type: 'DISCRETE' },
       'media.time': { 
         type: 'CONTINUOUS', 
-        driftThreshold: 2.0, 
+        driftThreshold: 4.0, 
         speedKey: 'media.playbackRate',
         activeIfKey: 'media.paused',
         activeInverted: true 
@@ -64,10 +80,6 @@ class BaseSyncPlugin extends SyncWatchCore {
     }
 
     return this.videoElement;
-  }
-
-  getCurrentUrl() {
-    return window.location.href;
   }
 
   getBaseState() {
@@ -140,8 +152,9 @@ class BaseSyncPlugin extends SyncWatchCore {
             };
 
 
+
             
-            this.sendReportToApp(packet).then(() => { if (packet.fullState.sidebarCode) this.uiSent = true; });
+            this.sendReportToApp(packet).then(() => { if (packet.sidebarCode) this.uiSent = true; });
         }, 50); 
     };
 
@@ -290,17 +303,24 @@ class BaseSyncPlugin extends SyncWatchCore {
       const [localTime, setLocalTime] = React.useState(time);
 
       React.useEffect(() => {
-        if (!media) return;
         if (!isDragging) {
-            setLocalTime(prev => Math.abs(prev - time) > 0.5 ? time : prev);
+            setLocalTime(time);
         }
-      }, [time, isDragging, media]);
+      }, [time, isDragging]);
+
+      const lastTick = React.useRef(Date.now());
 
       React.useEffect(() => {
         if (!media) return;
         let interval;
         if (!isPaused && !isDragging) {
-            interval = setInterval(() => setLocalTime(prev => prev + 0.1), 100);
+            lastTick.current = Date.now();
+            interval = setInterval(() => {
+                const now = Date.now();
+                const delta = (now - lastTick.current) / 1000;
+                lastTick.current = now;
+                setLocalTime(prev => prev + delta);
+            }, 100);
         }
         return () => clearInterval(interval);
       }, [isPaused, isDragging, media]);
@@ -322,11 +342,11 @@ class BaseSyncPlugin extends SyncWatchCore {
         ${this.getContentTop()},
 
         isIdle ? React.createElement('div', { key: 'idle', className: 'flex flex-col items-center gap-4 opacity-50 my-10' }, [
-            React.createElement('span', { className: 'text-xs font-bold text-white uppercase tracking-widest' }, 'En attente de vidéo...')
+            React.createElement('span', { key: 'idle-msg', className: 'text-xs font-bold text-white uppercase tracking-widest' }, 'En attente de vidéo...')
         ]) : null,
 
         isAd ? React.createElement('div', { key: 'ad', className: 'my-10 animate-pulse' }, [
-            React.createElement('span', { className: 'text-xl font-black text-red-500 tracking-widest' }, 'PUBLICITÉ')
+            React.createElement('span', { key: 'ad-msg', className: 'text-xl font-black text-red-500 tracking-widest' }, 'PUBLICITÉ')
         ]) : null,
 
         isWatch ? React.createElement('div', { key: 'watch', className: 'flex flex-col items-center w-full gap-4' }, [

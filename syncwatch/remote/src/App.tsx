@@ -19,7 +19,6 @@ function App() {
 
 
   useEffect(() => {
-    // Écouter les événements de création/jointure
     const unbind = listenToServer((payload: any) => {
       if (payload.type === 'ROOM_CREATED') {
         setRoomId(payload.roomId);
@@ -28,29 +27,33 @@ function App() {
         setState('GROUP');
 
         invoke('set_view_mode', { mode: 'HOME' });
+
       } else if (payload.type === 'JOIN_SUCCESS') {
         setRoomId(payload.roomId);
         setIsHost(false);
         if (payload.members) setMembers(payload.members);
+        invoke('set_view_mode', { mode: 'HOME' });
 
         if (payload.initialState?.activePluginId) {
           const pluginId = payload.initialState.activePluginId;
           setActivePluginId(pluginId);
-          
+
+          // ① Pré-synchronise le VirtualVideo avec l'état actuel de la room
           invoke('playback_control', {
             command: 'APPLY_STATE',
             data: payload.initialState
           });
+          // ② Sauter directement en WATCH
           setState('WATCH');
         } else {
-          setState('GROUP');
-          invoke('set_view_mode', { mode: 'HOME' });
-        }
 
+          // Pas encore de source active → page de choix
+          setState('GROUP');
+        }
       } else if (payload.type === 'MEMBERS_UPDATE') {
         setMembers(payload.members || []);
       } else if (payload.type === 'SYNC_ORDER') {
-        // Suivi automatique si l'on est au menu
+        // Suivi automatique de la navigation de l'Host si on est encore au menu
         if (state !== 'WATCH' && payload.activePluginId) {
           setActivePluginId(payload.activePluginId);
           if (payload.activeUrl) setActiveUrl(payload.activeUrl);
@@ -61,7 +64,6 @@ function App() {
 
 
 
-    // S'assurer que le mode HOME est actif au démarrage
     invoke('set_view_mode', { mode: 'HOME' });
 
     return () => {
@@ -79,7 +81,6 @@ function App() {
   };
 
   useEffect(() => {
-    // Test de connexion IPC au démarrage
     invoke('heartbeat').catch(console.error);
   }, []);
 
@@ -107,7 +108,6 @@ function App() {
     if (!targetUrl || targetUrl === activeUrl) return;
     console.log('[SyncWatch] 🧭 Auto-navigating to:', targetUrl);
     setActiveUrl(targetUrl);
-    invoke('set_view_mode', { mode: 'WATCH', url: targetUrl });
     if (state !== 'WATCH') setState('WATCH');
   };
 
