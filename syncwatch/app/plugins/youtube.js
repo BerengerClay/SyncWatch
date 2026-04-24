@@ -1,54 +1,59 @@
 class YouTubePlugin extends BaseSyncPlugin {
   constructor() {
     super();
-    this.name = 'YouTube';
+    this.name = "YouTube";
   }
 
   getCurrentUrl() {
-    if (this.videoElement) {
-      return window.location.href;
-    }
-    return null;
-  }
+    const isVideoPage = window.location.href.includes("watch?v=");
 
+    if (this.videoElement && isVideoPage) {
+      this.url = window.location.href;
+      return this.url;
+    } else if (this.videoElement && this.url) {
+      return this.url;
+    }
+    return window.location.href;
+  }
 
   // Vérifie si on est devant une pub
   isWatchingAd() {
-    const player = document.querySelector('#movie_player');
-    return player && player.classList.contains('ad-showing');
+    const player = document.querySelector("#movie_player");
+    return player && player.classList.contains("ad-showing");
   }
 
   // Trouve la vidéo locale
   findVideoElement() {
     // const player = document.querySelector('#movie_player');
-    const video = document.querySelector('#movie_player video');
+    const video = document.querySelector("#movie_player video");
     if (!video) return null;
 
     // if (!player || !video) return null;
     // if (!video.src || video.src === '') return null;
     // if (player.classList.contains('unstarted-mode')) return null;
-    
-    return video.src !== '' ? video : null;
+
+    return video.src !== "" ? video : null;
   }
 
   // 1. LES INFOS DE LA PAGE (Le Titre)
   scrapeTopData() {
-    const title = document.querySelector('h1.ytd-watch-metadata') || 
-                  document.querySelector('.ytd-video-primary-info-renderer h1');
+    const title =
+      document.querySelector("h1.ytd-watch-metadata") ||
+      document.querySelector(".ytd-video-primary-info-renderer h1");
     return title ? { ytTitle: title.innerText.trim() } : {};
   }
 
   // 2. L'ÉTAT SPÉCIFIQUE AU LECTEUR (La Pub)
   getCustomState() {
     return {
-        // La magie est ici : ça déclenche l'écran rouge du BasePlugin !
-        isAd: !!this.isWatchingAd() 
+      // La magie est ici : ça déclenche l'écran rouge du BasePlugin !
+      isAd: !!this.isWatchingAd(),
     };
   }
 
   // --- INTERFACE ---
   getContainerClasses() {
-    return 'bg-red-950/30 border-red-500/10 shadow-[0_0_50px_rgba(220,38,38,0.1)]';
+    return "bg-red-950/30 border-red-500/10 shadow-[0_0_50px_rgba(220,38,38,0.1)]";
   }
 
   getContentTop() {

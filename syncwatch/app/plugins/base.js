@@ -1,10 +1,10 @@
 /**
- * SyncWatch - BaseSyncPlugin V11 (Truly Agnostic + Premium UI + Latency Compensation)
+ * SyncWatch - BaseSyncPlugin V12 (Pure State Machine / No Blind Timeout)
  */
 class BaseSyncPlugin extends SyncWatchCore {
   constructor() {
     super();
-    this.name = 'Base Plugin';
+    this.name = "Base Plugin";
     this.uiSent = false;
     this.videoElement = null;
     this.aggregatedMedia = null;
@@ -13,56 +13,86 @@ class BaseSyncPlugin extends SyncWatchCore {
   }
 
   // --- 🛠️ HOOKS À SURCHARGER (Dans tf1.js, youtube.js...) ---
-  scrapeTopData() { return {}; }
-  getCustomState() { return {}; }
-  getContainerClasses() { return 'bg-slate-900/40 border-white/5 shadow-2xl'; }
-  getHeaderExtra() { return 'null'; }
-  getContentTop() { return 'null'; }
-  getContentBottom() { return 'null'; }
-  getFooterExtra() { return 'null'; }
+  scrapeTopData() {
+    return {};
+  }
+  getCustomState() {
+    return {};
+  }
+  getContainerClasses() {
+    return "bg-slate-900/40 border-white/5 shadow-2xl";
+  }
+  getHeaderExtra() {
+    return "null";
+  }
+  getContentTop() {
+    return "null";
+  }
+  getContentBottom() {
+    return "null";
+  }
+  getFooterExtra() {
+    return "null";
+  }
 
   // --- 📏 RÈGLES DE SYNCHRO (Vraiment Agnostique V2) ---
   getSyncRules() {
     return {
-      'media.paused': { type: 'DISCRETE' },
-      'media.playbackRate': { type: 'DISCRETE' },
-      'media.time': { 
-        type: 'CONTINUOUS', 
-        driftThreshold: 2.0, 
-        speedKey: 'media.playbackRate',
-        activeIfKey: 'media.paused',
-        activeInverted: true 
-      }
+      "media.paused": { type: "DISCRETE" },
+      "media.playbackRate": { type: "DISCRETE" },
+      "media.time": {
+        type: "CONTINUOUS",
+        driftThreshold: 2.0,
+        speedKey: "media.playbackRate",
+        activeIfKey: "media.paused",
+        activeInverted: true,
+      },
+      "media.seeking": { type: "IGNORED" },
     };
   }
 
   // --- MOTEUR DOM VIDÉO ---
   findVideoElement() {
-    return document.querySelector('video') || document.querySelector('audio');
+    return document.querySelector("video") || document.querySelector("audio");
   }
 
   getVideo() {
     const currentVideo = this.findVideoElement();
     if (!currentVideo) {
-        this.videoElement = null;
-        return null;
-    }
-
-    if (currentVideo !== this.videoElement) {
-      this.videoElement = currentVideo;
-      const trigger = () => window.top.postMessage({ type: 'SW_TRIGGER_SYNC' }, '*');
-      // On écoute tous les événements qui changent l'état
-      ['play', 'pause', 'seeked', 'ratechange'].forEach(e => {
-        this.videoElement.addEventListener(e, trigger);
-      });
-    }
-
-    // 🛡️ Sécurité : Si la vidéo a été supprimée du DOM, on nettoie
-    if (this.videoElement && !document.body.contains(this.videoElement)) {
       this.videoElement = null;
       return null;
     }
 
+    if (currentVideo !== this.videoElement) {
+      this.videoElement = currentVideo;
+
+      const triggerSync = (isManual = false) => {
+        // 🟢 Priming de l'iframe avant d'avertir le master
+        if (window !== window.top) {
+          window.top.postMessage(
+            {
+              type: "SW_INFO",
+              media: this.getBaseState(),
+            },
+            "*",
+          );
+        }
+        window.top.postMessage(
+          { type: "SW_TRIGGER_SYNC", isManual: isManual },
+          "*",
+        );
+      };
+
+      // 🪓 L'ÉLAGAGE PARFAIT : On écoute les événements de base
+      ["play", "pause", "seeked", "seeking", "ratechange"].forEach((e) => {
+        this.videoElement.addEventListener(e, () => triggerSync(true));
+      });
+    }
+
+    if (this.videoElement && !document.body.contains(this.videoElement)) {
+      this.videoElement = null;
+      return null;
+    }
     return this.videoElement;
   }
 
@@ -76,8 +106,9 @@ class BaseSyncPlugin extends SyncWatchCore {
     return {
       time: v.currentTime,
       paused: v.paused,
+      seeking: v.seeking, // 🟢 NOTRE VIGILE
       duration: v.duration || 0,
-      playbackRate: v.playbackRate || 1.0
+      playbackRate: v.playbackRate || 1.0,
     };
   }
 
@@ -85,21 +116,21 @@ class BaseSyncPlugin extends SyncWatchCore {
     const v = this.getVideo();
     if (!v || !s) return;
 
+    // 🗑️ SUPPRIMÉ : Le isApplyingState = true et le setTimeout de 500ms !
+    // Le plugin fait juste son boulot mécaniquement :
     if (s.time !== undefined && Math.abs(v.currentTime - s.time) > 0.5) {
       v.currentTime = s.time;
     }
-    
-    if (v.paused !== s.paused) {
+    if (s.paused !== undefined && v.paused !== s.paused) {
       s.paused ? v.pause() : v.play().catch(() => {});
     }
-
-    if (v.playbackRate !== s.playbackRate) {
-        v.playbackRate = s.playbackRate;
+    if (s.playbackRate !== undefined && v.playbackRate !== s.playbackRate) {
+      v.playbackRate = s.playbackRate;
     }
   }
 
   init() {
-    if (window.location.href.startsWith('about:')) return; 
+    if (window.location.href.startsWith("about:")) return;
     window === window.top ? this.initTopMaster() : this.initIframeSensor();
   }
 
@@ -107,95 +138,104 @@ class BaseSyncPlugin extends SyncWatchCore {
     if (window.swInitDone) return;
     window.swInitDone = true;
 
-    const forceSync = (isManualTrigger = false) => {
-        if (this.syncTimeout) clearTimeout(this.syncTimeout);
-        
-        this.syncTimeout = setTimeout(() => {
-            const currentState = {
-                media: this.aggregatedMedia || this.getBaseState(),
-                features: { ...this.scrapeTopData(), ...(this.aggregatedFeatures || {}) },
-                activeUrl: this.getCurrentUrl(),
-                rules: this.getSyncRules()
-            };
+    const forceSync = (isManual = false) => {
+      if (this.syncTimeout) return;
 
+      this.syncTimeout = setTimeout(() => {
+        this.syncTimeout = null;
 
+        const currentState = {
+          media: this.getBaseState() || this.aggregatedMedia,
+          features: {
+            ...this.scrapeTopData(),
+            ...(this.aggregatedFeatures || {}),
+          },
+          activeUrl: this.getCurrentUrl(),
+          rules: this.getSyncRules(),
+        };
 
+        if (!currentState.media) currentState.features = null;
 
+        document.querySelectorAll("iframe").forEach((f) => {
+          f.contentWindow?.postMessage({ type: "SW_FORCE_UPDATE" }, "*");
+        });
 
-            // 🛡️ Si pas de média, on vide les features (Anti-Ghost)
-            if (!currentState.media) {
-                currentState.features = null;
-            }
+        const packet = {
+          ts: Date.now(),
+          fullState: currentState,
+          isManual: isManual,
+          sidebarCode: !this.uiSent ? this.getSidebarCode() : null,
+        };
 
-            // 2. Interrogation des Iframes pour rafraîchir l'agrégation
-            document.querySelectorAll('iframe').forEach(f => {
-                f.contentWindow?.postMessage({ type: 'SW_FORCE_UPDATE' }, '*');
-            });
-
-            const packet = {
-                ts: Date.now(),
-                isManualTrigger: isManualTrigger, // On dit juste s'il y a eu une action humaine
-                fullState: currentState,          // On envoie toujours tout au Shell
-                sidebarCode: !this.uiSent ? this.getSidebarCode() : null
-            };
-
-
-            
-            this.sendReportToApp(packet).then(() => { if (packet.fullState.sidebarCode) this.uiSent = true; });
-        }, 50); 
+        this.sendReportToApp(packet).then(() => {
+          if (packet.sidebarCode) this.uiSent = true;
+        });
+      }, 50);
     };
 
-    window.addEventListener('message', (e) => {
-        if (!e.data) return;
-        if (e.data.type === 'SW_INFO') {
-            if (e.data.media) this.aggregatedMedia = e.data.media;
-            if (e.data.features) this.aggregatedFeatures = { ...this.aggregatedFeatures, ...e.data.features };
-        }
-        if (e.data.type === 'SW_TRIGGER_SYNC') {
-            forceSync(true);
-        }
+    window.addEventListener("message", (e) => {
+      if (!e.data) return;
+      if (e.data.type === "SW_INFO") {
+        if (e.data.media) this.aggregatedMedia = e.data.media;
+        if (e.data.features)
+          this.aggregatedFeatures = {
+            ...this.aggregatedFeatures,
+            ...e.data.features,
+          };
+      }
+      if (e.data.type === "SW_TRIGGER_SYNC") forceSync(e.data.isManual);
     });
-
-    // --- Dans BaseSyncPlugin.js ---
 
     this.listenToApp((cmd, data) => {
-        if (cmd === 'APPLY_STATE' && data.media) {
-            this.applyBaseState(data.media);
-            document.querySelectorAll('iframe').forEach(f => {
-                f.contentWindow?.postMessage({ type: 'SW_APPLY_STATE', payload: data }, '*');
-            });
-        }
-        // 🛡️ CORRECTION : false, car c'est une réaction à un ordre, pas un déclencheur manuel
-        forceSync(false); 
+      if (cmd === "APPLY_STATE" && data.media !== undefined) {
+        if (data.media)
+          this.aggregatedMedia = {
+            ...(this.aggregatedMedia || {}),
+            ...data.media,
+          };
+        this.applyBaseState(data.media);
+
+        document.querySelectorAll("iframe").forEach((f) => {
+          f.contentWindow?.postMessage(
+            { type: "SW_APPLY_STATE", payload: data },
+            "*",
+          );
+        });
+      }
+      // Si ça vient de l'humain (bouton Sidebar), on force un scan
+      if (data && data.isLocal) forceSync(true);
     });
 
-    window.addEventListener('pagehide', () => {
-        this.sendReportToApp({
-            media: null, 
-            features: { title: 'Déconnexion...' }, 
-            sidebarCode: null
-        }).catch(() => {});
+    window.addEventListener("pagehide", () => {
+      this.sendReportToApp({
+        media: null,
+        features: { title: "Déconnexion..." },
+        sidebarCode: null,
+      }).catch(() => {});
     });
 
     setInterval(() => forceSync(false), 1000);
-    forceSync();
+    forceSync(false);
   }
 
   initIframeSensor() {
     const sendToTop = () => {
-        window.top.postMessage({
-            type: 'SW_INFO',
-            media: this.getBaseState(),
-            features: this.getCustomState()
-        }, '*');
+      window.top.postMessage(
+        {
+          type: "SW_INFO",
+          media: this.getBaseState(),
+          features: this.getCustomState(),
+        },
+        "*",
+      );
     };
 
-    window.addEventListener('message', (e) => {
-        if (!e.data) return;
-        if (e.data.type === 'SW_FORCE_UPDATE') sendToTop();
-        if (e.data.type === 'SW_APPLY_STATE' && e.data.payload.media) {
-            this.applyBaseState(e.data.payload.media);
-        }
+    window.addEventListener("message", (e) => {
+      if (!e.data) return;
+      if (e.data.type === "SW_FORCE_UPDATE") sendToTop();
+      if (e.data.type === "SW_APPLY_STATE" && e.data.payload.media) {
+        this.applyBaseState(e.data.payload.media);
+      }
     });
 
     sendToTop();
@@ -226,7 +266,10 @@ class BaseSyncPlugin extends SyncWatchCore {
     return `React.createElement('button', {
         key: 'play-pause-btn',
         onClick: () => {
-            props.sendControl('APPLY_STATE', { media: { paused: !isPaused, time: localTime } });
+            props.sendControl('APPLY_STATE', { 
+                media: { paused: !isPaused, time: localTime },
+                isLocal: true
+            });
         },
         className: 'group relative flex items-center justify-center w-20 h-20 rounded-full bg-slate-800/40 backdrop-blur-xl border border-white/10 hover:border-emerald-500/50 transition-all duration-700 shadow-[0_0_40px_rgba(0,0,0,0.3)] hover:shadow-emerald-500/20'
     }, [
@@ -263,7 +306,10 @@ class BaseSyncPlugin extends SyncWatchCore {
             onInput: (e) => { setIsDragging(true); setLocalTime(parseFloat(e.target.value)); },
             onChange: (e) => {
                 const val = parseFloat(e.target.value);
-                props.sendControl('APPLY_STATE', { media: { time: val } });
+                props.sendControl('APPLY_STATE', { 
+                    media: { time: val },
+                    isLocal: true
+                });
                 setTimeout(() => setIsDragging(false), 600);
             },
             className: 'absolute w-full h-full appearance-none bg-transparent cursor-pointer z-30 opacity-0'

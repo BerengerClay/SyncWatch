@@ -10,18 +10,20 @@ interface Props {
   roomId: string;
   isHost: boolean;
   members: any[];
-  activeUrl: string;
-  activePluginId: string; // NOUVEAU
+  activeUrl: string | null;
+  activePluginId: string | null; // NOUVEAU
+  clockOffset: number;
   onLeave: () => void;
 
   onStop: () => void;
   onNavigate?: (targetUrl: string) => void;
+  initialRoomState?: any; // NOUVEAU
 }
 
 
 
 
-export const WatchScreen: React.FC<Props> = ({ roomId, isHost, members, activeUrl, activePluginId, onLeave, onStop, onNavigate }) => {
+export const WatchScreen: React.FC<Props> = ({ roomId, isHost, members, activeUrl, activePluginId, clockOffset, onLeave, onStop, onNavigate, initialRoomState }) => {
 
 
 
@@ -192,6 +194,8 @@ export const WatchScreen: React.FC<Props> = ({ roomId, isHost, members, activeUr
         onUpdate={handleUpdate}
         onNavigate={onNavigate}
         activePluginId={activePluginId}
+        initialRoomState={initialRoomState}
+        clockOffset={clockOffset}
       />
 
 

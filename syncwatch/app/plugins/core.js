@@ -10,6 +10,7 @@ class SyncWatchCore {
   // Envoi vers Rust (Radar)
   sendReportToApp(payload) {
     if (this.isTauriAvailable) {
+      console.log("[SyncWatch] 📡 Envoi du rapport :", payload);
       return window.__TAURI_INTERNALS__.invoke('playback_report', { payload })
         .catch(() => console.warn("[SyncWatch] Échec de l'envoi du rapport"));
     }
