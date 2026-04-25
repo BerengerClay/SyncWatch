@@ -43,7 +43,11 @@ export const getIncrementalDiff = (
   newObj: any,
   oldObj: any,
   rules: any,
+  nowTs?: number,
+  lastTs?: number,
   currentPath = "",
+  rootNew = newObj,
+  rootOld = oldObj,
 ): any => {
   const patch: any = {};
   let hasChanged = false;
@@ -54,35 +58,81 @@ export const getIncrementalDiff = (
     const valNew = newObj[key];
     const valOld = currentOld[key];
 
-    // 0. Protection des données ignorées (Traitement local uniquement)
+    // 0. Protection des données ignorées
     if (rules && rules[path]?.type === "IGNORED") continue;
 
-    // 1. Protection des données continues (Smart Detect)
+    // 1. Protection des données continues (Smart Detect + Dead Reckoning)
     if (rules && rules[path]?.type === "CONTINUOUS") {
-      const threshold = 0.00005; //rules[path].driftThreshold || 2.0;
-      // On ne sync que si l'écart est supérieur au threshold (Jump manuel)
-      if (Math.abs(valNew - valOld) < threshold) continue;
+      const CAPTURE_THRESHOLD = 0.5; // Sensibilité de capture locale (500ms)
+      let threshold = CAPTURE_THRESHOLD;
+
+      if (nowTs && lastTs) {
+        // 🟢 CORRECTION : On utilise rootNew pour lire les chemins absolus
+        const speed =
+          (rules[path].speedKey && getValue(rootNew, rules[path].speedKey)) ?? 1;
+
+        // 🟢 CORRECTION : On redevient Agnostique !
+        const activeKey = rules[path].activeIfKey;
+        const isActiveNow = activeKey ? !!getValue(rootNew, activeKey) : true;
+        const wasActiveBefore =
+          activeKey ? !!getValue(rootOld, activeKey) : true;
+
+        const realIsActiveNow =
+          rules[path].activeInverted ? !isActiveNow : isActiveNow;
+        const realWasActiveBefore =
+          rules[path].activeInverted ? !wasActiveBefore : wasActiveBefore;
+
+        // Smart Threshold : On garde la précision chirurgicale en pause
+        if (!realIsActiveNow && !realWasActiveBefore) {
+          threshold = 0.001; // Epsilon de sécurité (1ms)
+        }
+
+        const deltaTimeSec = (nowTs - lastTs) / 1000;
+        const projectedValue =
+          valOld + (realWasActiveBefore ? deltaTimeSec * speed : 0);
+        const drift = Math.abs(valNew - projectedValue);
+
+        // Si l'écart avec la prédiction est faible, on ignore
+        if (drift < threshold) continue;
+
+        console.log(
+          `[Sync] 🚀 Drift! Real: ${valNew.toFixed(3)}, Projected: ${projectedValue.toFixed(
+            3,
+          )}, Drift: ${drift.toFixed(3)} (Threshold: ${threshold})`,
+        );
+      } else {
+        // Fallback sans temps
+        if (Math.abs(valNew - valOld) < threshold) continue;
+      }
     }
 
-    // 2. CAS DES TABLEAUX (C'est ici qu'on règle ton bug Youtube !)
+    // 2. CAS DES TABLEAUX
     if (Array.isArray(valNew) && Array.isArray(valOld)) {
-      // On compare le contenu, pas l'adresse mémoire
       if (JSON.stringify(valNew) !== JSON.stringify(valOld)) {
         patch[key] = valNew;
         hasChanged = true;
       }
-      continue; // On passe à la clé suivante
+      continue;
     }
 
     // 3. CAS DES OBJETS (Récursivité)
     if (valNew !== null && typeof valNew === "object") {
-      const subPatch = getIncrementalDiff(valNew, valOld, rules, path);
+      const subPatch = getIncrementalDiff(
+        valNew,
+        valOld,
+        rules,
+        nowTs,
+        lastTs,
+        path,
+        rootNew,
+        rootOld,
+      );
       if (subPatch) {
         patch[key] = subPatch;
         hasChanged = true;
       }
     }
-    // 4. CAS DES VALEURS SIMPLES (String, Number, Boolean)
+    // 4. CAS DES VALEURS SIMPLES
     else if (valNew !== valOld) {
       patch[key] = valNew;
       hasChanged = true;
@@ -127,31 +177,34 @@ export const interpolatePatch = (
   clockOffset: number,
   lastState: any,
 ) => {
-  if (!serverTs || !rules) return patch;
+  if (!serverTs || !rules || !patch) return patch;
 
   const nowSynced = Date.now() + clockOffset;
-  const delay = (nowSynced - serverTs) / 1000;
+  const delay = Math.max(0, (nowSynced - serverTs) / 1000);
+
+  if (delay === 0) return patch;
 
   Object.keys(rules).forEach((path) => {
     const rule = rules[path];
     if (rule.type === "CONTINUOUS") {
       const valInPatch = getValue(patch, path);
-      if (typeof valInPatch === "number") {
-        // Determine speed (default to 1.0)
-        const speed =
-          rule.speedKey ?
-            (getValue(patch, rule.speedKey) ??
-            getValue(lastState, rule.speedKey) ??
-            1)
-          : 1;
 
-        // Determine if it should be moving
-        const active =
-          rule.activeIfKey ?
-            (getValue(patch, rule.activeIfKey) ??
-            getValue(lastState, rule.activeIfKey))
+      if (typeof valInPatch === "number") {
+        const speed = rule.speedKey
+          ? (getValue(patch, rule.speedKey) ??
+            getValue(lastState, rule.speedKey) ??
+            1.0)
+          : 1.0;
+
+        let isActive = rule.activeIfKey
+          ? (getValue(patch, rule.activeIfKey) ??
+            getValue(lastState, rule.activeIfKey) ??
+            true)
           : true;
-        const isActive = rule.activeInverted ? !active : !!active;
+
+        if (rule.activeInverted) {
+          isActive = !isActive;
+        }
 
         if (isActive) {
           const interpolatedValue = valInPatch + delay * speed;
@@ -160,5 +213,6 @@ export const interpolatePatch = (
       }
     }
   });
+
   return patch;
 };

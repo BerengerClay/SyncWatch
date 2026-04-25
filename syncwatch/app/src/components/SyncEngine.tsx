@@ -3,6 +3,7 @@ import { listenToServer, socket } from "../services/socket";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  getValue,
   deepMerge,
   getIncrementalDiff,
   buildHeartbeatPayload,
@@ -40,22 +41,33 @@ export const SyncEngine: React.FC<{
     initialRoomState?.rules || null,
   );
   const lastStateRef = useRef<any>(
-    initialRoomState ? JSON.parse(JSON.stringify(initialRoomState)) : null,
+    initialRoomState ? structuredClone(initialRoomState) : null,
   );
   const lastHeartbeatRef = useRef<number>(0);
+  const lastStateTsRef = useRef<number>(initialRoomState?.ts || Date.now());
 
   useEffect(() => {
     // --- 1. LECTURE DES ÉVÉNEMENTS DU PLUGIN ---
     const unlistenTauri = listen("player-update", (event: any) => {
-      const { ts, fullState, isManual, ...restOfPayload } = event.payload;
+      const { ts, fullState, ...restOfPayload } = event.payload;
       if (!fullState) return;
+
+      // 🟢 On prépare l'état de référence (Diffing + Baseline)
+      const stateToDiff = { ...fullState, activePluginId };
+
+      if (!rulesRef.current && fullState.rules) {
+        rulesRef.current = fullState.rules;
+      }
 
       // 1. MISE À JOUR UI
       const uiState = { ...restOfPayload, ...fullState };
+
+      // si on charge une nouvelle vidéo le temps qu'elle charge, on met à jour l'état précédent pour éviter le flash noir
       if (fullState.media === null && expectedStateRef.current !== null) {
         uiState.media = lastStateRef.current?.media || null;
         uiState.activeUrl = lastStateRef.current?.activeUrl || null;
       }
+
       onUpdate(uiState);
 
       const isAdActive = fullState.features?.isAd === true;
@@ -68,55 +80,72 @@ export const SyncEngine: React.FC<{
           const expected = expectedStateRef.current;
           const actual = fullState.media;
 
-          // 🧹 MISSION A : On attend la fermeture (WIPE)
+          // quand on reçoit un sync order pour fermer une vidéo (expected === null) on attend que la vidéo soit fermée en local
           if (expected === null) {
             if (actual === null) {
-              console.log("[SyncEngine] 🧹 Vidéo déchargée. Bouclier baissé.");
               expectedStateRef.current = undefined;
               isApplyingStateRef.current = false;
             }
             return; // ⛔ On bloque
           }
 
-          if (actual === null) return; // La vidéo n'est pas encore montée
+          if (actual === null) return; // La vidéo n'est pas encore chargée
 
-          // 🚦 LE VIGILE (La vidéo charge-t-elle ?)
-          if (actual.seeking === true) {
-            // console.log("⏳ Le Vigile bloque : la roue tourne...");
-            return; // ⛔ On bloque tout.
-          }
+          // 🚦 LE VIGILE AGNOSTIQUE (La vidéo charge-t-elle ?)
+          const isBlocked = Object.values(rulesRef.current || {}).some(
+            (rule: any) => {
+              if (rule.blockingIfKey) {
+                const val = getValue(fullState, rule.blockingIfKey);
+                return !!val;
+              }
+              return false;
+            },
+          );
 
-          // 🔎 LA CHECKLIST (L'image est là, est-ce la bonne ?)
+          if (isBlocked) return; // ⛔ On bloque tout.
+
+          // 🔎 LA CHECKLIST AGNOSTIQUE (L'image est là, est-ce la bonne ?)
           let isMissionAccomplished = true;
 
-          // Arrondi intelligent pour le temps
-          if (
-            expected.time !== undefined &&
-            Math.abs(expected.time - actual.time) > 1.0
-          ) {
-            isMissionAccomplished = false;
+          for (const key in expected) {
+            if (key === "ts" || key === "lastShot") continue;
 
-            // Relance automatique si YouTube fait la sourde oreille
+            const expectedVal = expected[key];
+            const actualVal = actual[key];
+            const path = `media.${key}`;
+            const rule = rulesRef.current?.[path];
+
+            if (rule?.type === "CONTINUOUS") {
+              if (Math.abs(expectedVal - actualVal) > 0.5) {
+                isMissionAccomplished = false;
+                break;
+              }
+            } else if (expectedVal !== actualVal) {
+              isMissionAccomplished = false;
+              break;
+            }
+          }
+
+          // ⚡ RELANCE AUTOMATIQUE (Si la mission échoue, on ré-insiste)
+          if (!isMissionAccomplished) {
             const now = Date.now();
             if (!expected.lastShot || now - expected.lastShot > 1000) {
+              const { ts, lastShot, ...mediaOrder } = expected;
               invoke("playback_control", {
                 command: "APPLY_STATE",
-                data: { media: { time: expected.time } },
+                data: { media: mediaOrder },
               });
               expected.lastShot = now;
             }
-          }
-          // Égalité stricte pour la pause
-          if (
-            expected.paused !== undefined &&
-            expected.paused !== actual.paused
-          ) {
-            isMissionAccomplished = false;
+            return; // ⛔ On reste bloqué derrière le bouclier tant que c'est pas parfait
           }
 
           // 🏁 VALIDATION FINALE
           if (isMissionAccomplished) {
-            console.log("[SyncEngine] ✅ Checklist remplie. Bouclier baissé.");
+            // 🟢 RESET DE LA BASELINE : On repart sur l'état exact qu'on vient de valider
+            lastStateRef.current = structuredClone(stateToDiff);
+            lastStateTsRef.current = ts;
+
             expectedStateRef.current = undefined;
             isApplyingStateRef.current = false;
           }
@@ -125,34 +154,22 @@ export const SyncEngine: React.FC<{
         return; // ⛔ QUOI QU'IL ARRIVE : Le bouclier empêche le code d'aller plus bas !
       }
 
-      // ==========================================
-      // 🧠 DIFFING & RÉSEAU (Le Bouclier est baissé)
-      // ==========================================
-      if (fullState.rules && !rulesRef.current)
-        rulesRef.current = fullState.rules;
-
-      const stateToDiff = { ...fullState, activePluginId };
       let patch = null;
 
       // 🚫 Filtre Anti-Pub pour les actions humaines
       if (!isAdActive) {
-        // 🟢 L'ASTUCE ANTI-SPAM EST ICI :
-        // Si c'est le "setInterval" (isManual = false), on aligne le temps en mémoire
-        // avec le nouveau temps juste avant de faire le diff.
-        // Comme ça, le diff ne voit aucun écart de temps, et ne tire pas de SEND_ACTION !
-        if (!isManual && lastStateRef.current?.media && stateToDiff.media) {
-          lastStateRef.current.media.time = stateToDiff.media.time;
-        }
-
         patch = getIncrementalDiff(
           stateToDiff,
           lastStateRef.current,
           rulesRef.current,
+          ts, // On envoie l'heure actuelle
+          lastStateTsRef.current, // Et l'heure de la mémoire
         );
       }
 
       if (patch) {
-        lastStateRef.current = JSON.parse(JSON.stringify(stateToDiff));
+        lastStateRef.current = structuredClone(stateToDiff);
+        lastStateTsRef.current = ts; // 🟢 On met à jour l'horloge de référence
         socket.emit("SEND_ACTION", {
           ts: Date.now() + clockOffset,
           data: patch,
@@ -168,34 +185,48 @@ export const SyncEngine: React.FC<{
     });
 
     // --- 2. RÉCEPTION DEPUIS LE SERVEUR ---
-    const unlistenSocket = listenToServer((data: any) => {
-      if (data.type === "MEMBERS_UPDATE")
-        onMembersUpdate?.(data.members || []);
+    const unlistenSocket = listenToServer((packet: any) => {
+      if (packet.type === "MEMBERS_UPDATE") {
+        onMembersUpdate?.(packet.members || []);
+        return;
+      }
 
-      if (
-        ["JOIN_SUCCESS", "SYNC_ORDER", "NAVIGATE_TO_SOURCE"].includes(data.type)
-      ) {
-        let patch = data.initialState || data.data || data;
+      let patch = null;
+
+      if (packet.type === "JOIN_SUCCESS") {
+        patch = packet.initialState;
+        if (packet.members) onMembersUpdate?.(packet.members);
+      } else if (packet.type === "SYNC_ORDER") {
+        patch = packet.data;
+      }
+
+      if (patch) {
+        // 🧪 Interpolation & Réconciliation
         patch = interpolatePatch(
           patch,
           rulesRef.current,
-          data.ts,
+          packet.ts,
           clockOffset,
           lastStateRef.current,
         );
 
-        if (patch.activeUrl !== undefined && onNavigate)
+        // 🧭 Navigation (Changement d'URL)
+        if (patch.activeUrl !== undefined && onNavigate) {
           onNavigate(patch.activeUrl);
-        if (data.type === "JOIN_SUCCESS" && data.members)
-          onMembersUpdate?.(data.members);
-
-        // 🛡️ PRÉPARATION DU BOUCLIER & DE LA CHECKLIST
-        if (patch.media !== undefined) {
-          isApplyingStateRef.current = true;
-          expectedStateRef.current = patch.media; // C'est devenu ultra simple !
         }
 
+        // 🛡️ ACTIVATION DU BOUCLIER (Si on change le temps ou la pause)
+        if (patch.media !== undefined) {
+          isApplyingStateRef.current = true;
+          expectedStateRef.current = patch.media;
+        }
+
+        // 🧠 Mise à jour de la mémoire et du lecteur
         lastStateRef.current = deepMerge(lastStateRef.current || {}, patch);
+        lastStateTsRef.current = packet.ts
+          ? packet.ts - clockOffset
+          : Date.now();
+
         invoke("playback_control", { command: "APPLY_STATE", data: patch });
         onUpdate(patch);
       }

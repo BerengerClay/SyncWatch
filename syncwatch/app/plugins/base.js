@@ -46,6 +46,7 @@ class BaseSyncPlugin extends SyncWatchCore {
         speedKey: "media.playbackRate",
         activeIfKey: "media.paused",
         activeInverted: true,
+        blockingIfKey: "media.seeking",
       },
       "media.seeking": { type: "IGNORED" },
     };
@@ -66,7 +67,7 @@ class BaseSyncPlugin extends SyncWatchCore {
     if (currentVideo !== this.videoElement) {
       this.videoElement = currentVideo;
 
-      const triggerSync = (isManual = false) => {
+      const triggerSync = () => {
         // 🟢 Priming de l'iframe avant d'avertir le master
         if (window !== window.top) {
           window.top.postMessage(
@@ -77,15 +78,12 @@ class BaseSyncPlugin extends SyncWatchCore {
             "*",
           );
         }
-        window.top.postMessage(
-          { type: "SW_TRIGGER_SYNC", isManual: isManual },
-          "*",
-        );
+        window.top.postMessage({ type: "SW_TRIGGER_SYNC" }, "*");
       };
 
       // 🪓 L'ÉLAGAGE PARFAIT : On écoute les événements de base
       ["play", "pause", "seeked", "seeking", "ratechange"].forEach((e) => {
-        this.videoElement.addEventListener(e, () => triggerSync(true));
+        this.videoElement.addEventListener(e, () => triggerSync());
       });
     }
 
@@ -118,7 +116,7 @@ class BaseSyncPlugin extends SyncWatchCore {
 
     // 🗑️ SUPPRIMÉ : Le isApplyingState = true et le setTimeout de 500ms !
     // Le plugin fait juste son boulot mécaniquement :
-    if (s.time !== undefined && Math.abs(v.currentTime - s.time) > 0.5) {
+    if (s.time !== undefined) {
       v.currentTime = s.time;
     }
     if (s.paused !== undefined && v.paused !== s.paused) {
@@ -138,7 +136,7 @@ class BaseSyncPlugin extends SyncWatchCore {
     if (window.swInitDone) return;
     window.swInitDone = true;
 
-    const forceSync = (isManual = false) => {
+    const forceSync = () => {
       if (this.syncTimeout) return;
 
       this.syncTimeout = setTimeout(() => {
@@ -163,7 +161,6 @@ class BaseSyncPlugin extends SyncWatchCore {
         const packet = {
           ts: Date.now(),
           fullState: currentState,
-          isManual: isManual,
           sidebarCode: !this.uiSent ? this.getSidebarCode() : null,
         };
 
@@ -183,7 +180,7 @@ class BaseSyncPlugin extends SyncWatchCore {
             ...e.data.features,
           };
       }
-      if (e.data.type === "SW_TRIGGER_SYNC") forceSync(e.data.isManual);
+      if (e.data.type === "SW_TRIGGER_SYNC") forceSync();
     });
 
     this.listenToApp((cmd, data) => {
@@ -203,7 +200,7 @@ class BaseSyncPlugin extends SyncWatchCore {
         });
       }
       // Si ça vient de l'humain (bouton Sidebar), on force un scan
-      if (data && data.isLocal) forceSync(true);
+      if (data && data.isLocal) forceSync();
     });
 
     window.addEventListener("pagehide", () => {
@@ -214,8 +211,8 @@ class BaseSyncPlugin extends SyncWatchCore {
       }).catch(() => {});
     });
 
-    setInterval(() => forceSync(false), 1000);
-    forceSync(false);
+    setInterval(() => forceSync(), 500);
+    forceSync();
   }
 
   initIframeSensor() {
@@ -267,7 +264,7 @@ class BaseSyncPlugin extends SyncWatchCore {
         key: 'play-pause-btn',
         onClick: () => {
             props.sendControl('APPLY_STATE', { 
-                media: { paused: !isPaused, time: localTime },
+                media: { paused: !isPaused },
                 isLocal: true
             });
         },
