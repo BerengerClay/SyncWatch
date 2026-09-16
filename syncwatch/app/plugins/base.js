@@ -49,6 +49,15 @@ class BaseSyncPlugin extends SyncWatchCore {
         blockingIfKey: "media.seeking",
       },
       "media.seeking": { type: "IGNORED" },
+      "activeUrl": { type: "IGNORED" },
+      "features.isAd": {
+        type: "DISCRETE",
+        collective: true,
+        reactions: {
+          true: { "media.paused": true },
+          false: { "media.paused": false },
+        },
+      },
     };
   }
 
@@ -145,8 +154,9 @@ class BaseSyncPlugin extends SyncWatchCore {
         const currentState = {
           media: this.getBaseState() || this.aggregatedMedia,
           features: {
-            ...this.scrapeTopData(),
             ...(this.aggregatedFeatures || {}),
+            ...this.scrapeTopData(),
+            ...this.getCustomState(),
           },
           activeUrl: this.getCurrentUrl(),
           rules: this.getSyncRules(),
@@ -185,6 +195,12 @@ class BaseSyncPlugin extends SyncWatchCore {
 
     this.listenToApp((cmd, data) => {
       if (cmd === "APPLY_STATE" && data.media !== undefined) {
+        // 🛡️ DOUBLE SÉCURITÉ : Le plugin refuse de bouger s'il sait qu'il y a une pub
+        if (this.isWatchingAd()) {
+          console.log("[%s] 🛡️ Plugin Sanctuary: Ignoring sync order during ad.", this.name);
+          return;
+        }
+
         if (data.media)
           this.aggregatedMedia = {
             ...(this.aggregatedMedia || {}),

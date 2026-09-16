@@ -15,7 +15,7 @@ export const SyncEngine: React.FC<{
   onUpdate: (p: any) => void;
   onMembersUpdate?: (members: any[]) => void;
   onNavigate?: (url: string) => void;
-  activePluginId?: string;
+  activePluginId?: string | null;
   initialRoomState?: any;
   clockOffset: number;
 }> = ({
@@ -45,6 +45,7 @@ export const SyncEngine: React.FC<{
   );
   const lastHeartbeatRef = useRef<number>(0);
   const lastStateTsRef = useRef<number>(initialRoomState?.ts || Date.now());
+  const isLocalAdActiveRef = useRef<boolean>(false);
 
   useEffect(() => {
     // --- 1. LECTURE DES ÉVÉNEMENTS DU PLUGIN ---
@@ -69,8 +70,34 @@ export const SyncEngine: React.FC<{
       }
 
       onUpdate(uiState);
+      const wasAdActive = isLocalAdActiveRef.current;
+      const isAdActive = !!fullState.features?.isAd;
+      isLocalAdActiveRef.current = isAdActive;
 
-      const isAdActive = fullState.features?.isAd === true;
+      // ==========================================
+      // 🌅 LE RÉVEIL DU SANCTUAIRE (Sortie de Pub)
+      // ==========================================
+      if (wasAdActive && !isAdActive) {
+        console.log(
+          "[SyncEngine] 🌅 Fin de pub ! Vérification de la mémoire...",
+        );
+
+        // Si pendant notre pub, le serveur nous a donné un ordre (ex: Pause)
+        if (isApplyingStateRef.current && expectedStateRef.current) {
+          console.log(
+            "[SyncEngine] 🧠 Application de la mémoire en attente :",
+            expectedStateRef.current,
+          );
+
+          const { lastShot, ...mediaOrder } = expectedStateRef.current as any;
+
+          // On force le lecteur à obéir à la mémoire immédiatement
+          invoke("playback_control", {
+            command: "APPLY_STATE",
+            data: { media: mediaOrder },
+          });
+        }
+      }
 
       // ==========================================
       // 🛡️ LA MACHINE À ÉTATS (RÉSEAU UNIQUEMENT)
@@ -90,6 +117,11 @@ export const SyncEngine: React.FC<{
           }
 
           if (actual === null) return; // La vidéo n'est pas encore chargée
+          if (isAdActive) {
+            // 🛡️ SANCTUAIRE : On ne fait rien pour l'instant, on attend la fin de la pub.
+            // On garde l'info en mémoire pour "rattraper" le retard dès que la pub finit.
+            return;
+          }
 
           // 🚦 LE VIGILE AGNOSTIQUE (La vidéo charge-t-elle ?)
           const isBlocked = Object.values(rulesRef.current || {}).some(
@@ -151,21 +183,32 @@ export const SyncEngine: React.FC<{
           }
         }
 
-        return; // ⛔ QUOI QU'IL ARRIVE : Le bouclier empêche le code d'aller plus bas !
+        if (isLocalAdActiveRef.current) {
+          expectedStateRef.current = undefined;
+          isApplyingStateRef.current = false;
+        }
       }
 
+      // --- CALCUL DU DIFFÉRENTIEL ---
       let patch = null;
 
-      // 🚫 Filtre Anti-Pub pour les actions humaines
-      if (!isAdActive) {
-        patch = getIncrementalDiff(
-          stateToDiff,
-          lastStateRef.current,
-          rulesRef.current,
-          ts, // On envoie l'heure actuelle
-          lastStateTsRef.current, // Et l'heure de la mémoire
-        );
-      }
+      // Si on est en pub, on ne veut envoyer QUE les features (pour prévenir le serveur)
+      // et pas les mouvements erratiques de la vidéo de pub.
+      const stateForDiff =
+        isAdActive ? { features: stateToDiff.features } : stateToDiff;
+
+      const effectiveRules = {
+        ...(rulesRef.current || {}),
+        activeUrl: { type: "IGNORED" },
+      };
+
+      patch = getIncrementalDiff(
+        stateForDiff,
+        lastStateRef.current,
+        effectiveRules,
+        ts,
+        lastStateTsRef.current,
+      );
 
       if (patch) {
         lastStateRef.current = structuredClone(stateToDiff);
@@ -223,11 +266,18 @@ export const SyncEngine: React.FC<{
 
         // 🧠 Mise à jour de la mémoire et du lecteur
         lastStateRef.current = deepMerge(lastStateRef.current || {}, patch);
-        lastStateTsRef.current = packet.ts
-          ? packet.ts - clockOffset
-          : Date.now();
+        lastStateTsRef.current =
+          packet.ts ? packet.ts - clockOffset : Date.now();
 
-        invoke("playback_control", { command: "APPLY_STATE", data: patch });
+        // 🛡️ LE SANCTUAIRE : On n'applique rien au lecteur si on a une pub en local
+        if (!isLocalAdActiveRef.current) {
+          invoke("playback_control", { command: "APPLY_STATE", data: patch });
+        } else {
+          console.log(
+            "[SyncEngine] 🛡️ Sanctuaire de Pub : Ordre ignoré pour le lecteur.",
+          );
+        }
+
         onUpdate(patch);
       }
     });

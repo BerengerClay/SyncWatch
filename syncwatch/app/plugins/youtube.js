@@ -16,38 +16,76 @@ class YouTubePlugin extends BaseSyncPlugin {
     return window.location.href;
   }
 
-  // Vérifie si on est devant une pub
+  // Vérifie si on est devant une pub (Scanner de Shadow DOM exhaustif)
   isWatchingAd() {
-    const player = document.querySelector("#movie_player");
-    return player && player.classList.contains("ad-showing");
+    // 1. On récupère tous les lecteurs possibles (ceux dans le DOM normal)
+    const players = Array.from(document.querySelectorAll(".html5-video-player"));
+
+    // 2. On ajoute les lecteurs cachés dans les Shadow DOM des ytd-player
+    document.querySelectorAll("ytd-player").forEach((ytp) => {
+      if (ytp.shadowRoot) {
+        const shadowPlayer = ytp.shadowRoot.querySelector(".html5-video-player");
+        if (shadowPlayer) players.push(shadowPlayer);
+      }
+    });
+
+    // Fonction pour vérifier si un élément est réellement visible
+    const isVisible = (el) => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+
+    // 3. On vérifie si l'un d'entre eux porte la marque de la pub (ET est visible)
+    const isAnyAdActive = players.some((p) => {
+      // Les classes sur le player sont généralement fiables
+      if (p.classList.contains("ad-showing") || p.classList.contains("ad-interrupting")) return true;
+
+      // Pour les autres, on vérifie la visibilité ou le contenu
+      const overlay = p.querySelector(".ytp-ad-player-overlay");
+      if (isVisible(overlay)) return true;
+
+      const badge = p.querySelector(".ad-simple-attributed-string, .ytp-ad-badge-label");
+      if (isVisible(badge) && badge.innerText.trim().length > 0) return true;
+
+      const skip = p.querySelector(".ytp-ad-skip-button, .ytp-skip-ad-button");
+      if (isVisible(skip)) return true;
+
+      const adTitle = p.querySelector(".ytp-title-link");
+      if (isVisible(adTitle) && adTitle.innerText.trim().length > 0) return true;
+
+      return false;
+    });
+
+    return isAnyAdActive;
   }
 
-  // Trouve la vidéo locale
+  // Trouve la vidéo locale (Plus robuste)
   findVideoElement() {
-    // const player = document.querySelector('#movie_player');
-    const video = document.querySelector("#movie_player video");
-    if (!video) return null;
-
-    // if (!player || !video) return null;
-    // if (!video.src || video.src === '') return null;
-    // if (player.classList.contains('unstarted-mode')) return null;
-
-    return video.src !== "" ? video : null;
+    return document.querySelector("video.html5-main-video");
   }
 
   // 1. LES INFOS DE LA PAGE (Le Titre)
   scrapeTopData() {
+    // On cherche d'abord le titre "propre" de YouTube
     const title =
       document.querySelector("h1.ytd-watch-metadata") ||
-      document.querySelector(".ytd-video-primary-info-renderer h1");
-    return title ? { ytTitle: title.innerText.trim() } : {};
+      document.querySelector(".ytd-video-primary-info-renderer h1") ||
+      document.querySelector("yt-formatted-string.ytd-video-primary-info-renderer");
+
+    if (title && title.innerText.trim()) {
+      return { ytTitle: title.innerText.trim() };
+    }
+
+    // Si on est en pub, on essaie de choper le titre de la pub dans le player
+    const adTitle = document.querySelector(".ytp-title-link");
+    if (adTitle && adTitle.innerText.trim()) {
+      return { ytTitle: "[PUB] " + adTitle.innerText.trim() };
+    }
+
+    return {};
   }
 
   // 2. L'ÉTAT SPÉCIFIQUE AU LECTEUR (La Pub)
   getCustomState() {
     return {
-      // La magie est ici : ça déclenche l'écran rouge du BasePlugin !
-      isAd: !!this.isWatchingAd(),
+      isAd: this.isWatchingAd(),
     };
   }
 

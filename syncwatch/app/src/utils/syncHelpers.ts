@@ -146,24 +146,18 @@ export const getIncrementalDiff = (
  */
 export const buildHeartbeatPayload = (fullState: any, rules: any) => {
   const minimalistData: any = {};
-  if (!rules) return minimalistData;
+  if (!rules || !fullState) return minimalistData;
 
   Object.keys(rules).forEach((path) => {
     const rule = rules[path];
     if (rule.type === "CONTINUOUS") {
-      let isActive = true;
-      if (rule.activeIfKey) {
-        const conditionValue = getValue(fullState, rule.activeIfKey);
-        isActive = rule.activeInverted ? !conditionValue : !!conditionValue;
-      }
-      if (isActive) {
-        const val = getValue(fullState, path);
-        if (val !== undefined && val !== null) {
-          setValue(minimalistData, path, val);
-        }
+      const val = getValue(fullState, path);
+      if (val !== undefined && val !== null) {
+        setValue(minimalistData, path, val);
       }
     }
   });
+
   return minimalistData;
 };
 

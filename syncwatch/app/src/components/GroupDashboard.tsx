@@ -1,7 +1,6 @@
 import React from 'react';
 import { Tv, Crown, MessageSquare, Settings, Share2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { socket } from '../services/socket';
 
 interface Props {
   roomId: string;
