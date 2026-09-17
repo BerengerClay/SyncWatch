@@ -1,4 +1,5 @@
 import { Server, Socket } from "socket.io";
+import { monitor } from "../services/monitor.js";
 
 const getValue = (obj: any, path: string) =>
   path.split(".").reduce((acc, part) => acc && acc[part], obj);
@@ -31,23 +32,38 @@ const deepMerge = (target: any, source: any) => {
   return target;
 };
 
-interface Member {
+export interface WatchSession {
   id: string;
-  name: string;
-  lastMedia?: any;
-  features?: any;
-  lastHeartbeatTs?: number;
-}
-
-interface Room {
-  id: string;
-  hostId: string;
-  members: Member[];
-  state: any;
+  activeUrl: string | null;
+  activePluginId: string | null;
+  media: any;
+  features: any;
+  rules: Record<string, any>;
   lastUpdate: number;
 }
 
+export interface MemberPresence {
+  id: string;
+  name: string;
+  sessionId: string;
+  activeUrl?: string | null;
+  title?: string;
+  time?: number;
+  paused?: boolean;
+  isAd?: boolean;
+}
+
+export interface Room {
+  id: string;
+  hostId: string;
+  defaultSessionId: string;
+  members: MemberPresence[];
+  sessions: Record<string, WatchSession>;
+}
+
 const rooms: Map<string, Room> = new Map();
+
+export const getAllRooms = (): Room[] => Array.from(rooms.values());
 
 export const setupRoomHandlers = (io: Server, socket: Socket) => {
   const getRoom = (): Room | null => {
@@ -56,31 +72,93 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
     return rooms.get(roomId) || null;
   };
 
+  // Intercepteur de tous les messages entrants pour le Dashboard
+  socket.onAny((event, ...args) => {
+    if (event.startsWith("ADMIN_")) return;
+    const room = getRoom();
+    const member = room?.members.find((m) => m.id === socket.id);
+    monitor.logMessage({
+      socketId: socket.id,
+      userName: member?.name,
+      roomId: room?.id,
+      direction: "IN",
+      event,
+      data: args[0],
+    });
+  });
+
   const broadcastMembers = (room: Room) => {
-    io.to(room.id).emit("MEMBERS_UPDATE", { members: room.members });
+    io.to(room.id).emit("MEMBERS_UPDATE", {
+      members: room.members,
+      sessions: room.sessions,
+    });
+    monitor.logMessage({
+      socketId: "server",
+      roomId: room.id,
+      direction: "OUT",
+      event: "MEMBERS_UPDATE",
+      data: { membersCount: room.members.length, sessionsCount: Object.keys(room.sessions).length },
+    });
+    monitor.broadcastSnapshot(getAllRooms());
   };
 
+  const getExtrapolatedSession = (session: WatchSession) => {
+    const now = Date.now();
+    const timeDiff = (now - session.lastUpdate) / 1000;
+    const extrapolatedState = JSON.parse(JSON.stringify(session));
+
+    // Projection mathématique pour les données CONTINUOUS
+    const rules = session.rules || {};
+    Object.keys(rules).forEach((path) => {
+      const rule = rules[path];
+      if (rule.type === "CONTINUOUS") {
+        const speed = rule.speedKey ? getValue(session, rule.speedKey) || 1 : 1;
+        const active = rule.activeIfKey ? getValue(session, rule.activeIfKey) : true;
+        if (rule.activeInverted ? !active : active) {
+          const baseValue = getValue(session, path);
+          if (typeof baseValue === "number") {
+            const extrapolated = baseValue + timeDiff * speed;
+            setValue(extrapolatedState, path, extrapolated);
+          }
+        }
+      }
+    });
+
+    return { state: extrapolatedState, ts: now };
+  };
+
+  // --- 1. CRÉATION DU SALON ---
   socket.on("CREATE_ROOM", ({ userName }: { userName: string }) => {
     const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const hostSessionId = `sess_${socket.id.substring(0, 6)}`;
+    const initialSession: WatchSession = {
+      id: hostSessionId,
+      activeUrl: null,
+      activePluginId: null,
+      media: null,
+      features: {},
+      rules: {},
+      lastUpdate: Date.now(),
+    };
+
     const room: Room = {
       id: roomId,
       hostId: socket.id,
+      defaultSessionId: hostSessionId,
       members: [
         {
           id: socket.id,
           name: userName || "Host",
-          lastMedia: { time: 0, paused: true },
-          lastHeartbeatTs: Date.now(),
+          sessionId: hostSessionId,
+          activeUrl: null,
+          title: "En attente",
+          paused: true,
+          time: 0,
         },
       ],
-      state: {
-        activeUrl: null,
-        activePluginId: null,
-        media: null,
-        features: null,
-        rules: {},
+      sessions: {
+        [hostSessionId]: initialSession,
       },
-      lastUpdate: Date.now(),
     };
 
     rooms.set(roomId, room);
@@ -88,218 +166,392 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
     socket.emit("ROOM_CREATED", {
       roomId,
       hostId: socket.id,
+      sessionId: hostSessionId,
       members: room.members,
+      sessions: room.sessions,
     });
     broadcastMembers(room);
+    console.log(`[ROOM] Created ${roomId} with host session ${hostSessionId}`);
   });
 
+  // --- 2. REJOINDRE LE SALON ---
   socket.on(
     "JOIN_ROOM",
     ({ roomId, userName }: { roomId: string; userName: string }) => {
       const room = rooms.get(roomId);
       if (!room) return socket.emit("ERROR", "Room not found");
 
+      // Chaque nouveau membre commence dans sa propre session solo indépendante
+      const guestSessionId = `solo_${socket.id.substring(0, 6)}`;
+      const guestSession: WatchSession = {
+        id: guestSessionId,
+        activeUrl: null,
+        activePluginId: null,
+        media: null,
+        features: {},
+        rules: {},
+        lastUpdate: Date.now(),
+      };
+      room.sessions[guestSessionId] = guestSession;
+
       room.members.push({
         id: socket.id,
-        name: userName,
-        lastMedia: room.state.media
-          ? structuredClone(room.state.media)
-          : { time: 0, paused: true },
-        lastHeartbeatTs: Date.now(),
+        name: userName || "Invité",
+        sessionId: guestSessionId,
+        activeUrl: null,
+        title: "En attente",
+        paused: true,
+        time: 0,
       });
       socket.join(roomId);
-
-      const now = Date.now();
-      const timeDiff = (now - room.lastUpdate) / 1000;
-      const initialState = JSON.parse(JSON.stringify(room.state));
-
-      const rules = room.state.rules || {};
-      Object.keys(rules).forEach((path) => {
-        const rule = rules[path];
-        if (rule.type === "CONTINUOUS") {
-          const speed = rule.speedKey ? getValue(room.state, rule.speedKey) || 1 : 1;
-          const active = rule.activeIfKey ? getValue(room.state, rule.activeIfKey) : true;
-          if (rule.activeInverted ? !active : active) {
-            const baseValue = getValue(room.state, path);
-            if (typeof baseValue === "number") {
-              const extrapolated = baseValue + timeDiff * speed;
-              setValue(initialState, path, extrapolated);
-            }
-          }
-        }
-      });
 
       socket.emit("JOIN_SUCCESS", {
         roomId,
         hostId: room.hostId,
-        ts: now,
-        initialState,
+        sessionId: guestSessionId,
+        ts: Date.now(),
+        initialState: null,
         members: room.members,
+        sessions: room.sessions,
+      });
+
+      broadcastMembers(room);
+      console.log(`[ROOM] User ${userName} (${socket.id}) joined room ${roomId} in session ${guestSessionId}`);
+    }
+  );
+
+  // --- 3. CHANGEMENT DE VIDÉO PAR UN UTILISATEUR (Navigation spontanée) ---
+  socket.on(
+    "USER_NAVIGATED",
+    (payload: {
+      activeUrl: string;
+      title?: string;
+      activePluginId?: string | null;
+      media?: any;
+    }) => {
+      const room = getRoom();
+      if (!room || !payload?.activeUrl) return;
+
+      const member = room.members.find((m) => m.id === socket.id);
+      if (!member) return;
+
+      const previousUrl = member.activeUrl;
+      const isUrlChanged = payload.activeUrl !== previousUrl;
+
+      // On vérifie s'il y a d'autres personnes dans la même session
+      const othersInSession = room.members.filter(
+        (m) => m.sessionId === member.sessionId && m.id !== socket.id
+      );
+
+      let targetSessionId = member.sessionId;
+
+      if (othersInSession.length > 0) {
+        // D'autres personnes regardaient ensemble dans cette session :
+        // L'utilisateur se détache dans une nouvelle session solo pour ne pas perturber les autres !
+        targetSessionId = `solo_${socket.id.substring(0, 6)}_${Date.now().toString(36)}`;
+        member.sessionId = targetSessionId;
+        socket.emit("SESSION_CHANGED", { sessionId: targetSessionId });
+        monitor.logMessage({
+          socketId: socket.id,
+          userName: member.name,
+          roomId: room.id,
+          direction: "OUT",
+          event: "SESSION_CHANGED",
+          data: { sessionId: targetSessionId, reason: "detached_solo" },
+        });
+        console.log(`[SESSION] 🔀 ${member.name} s'est détaché dans une nouvelle session solo ${targetSessionId}`);
+      }
+
+      // Initialisation ou mise à jour de la session de ce membre
+      room.sessions[targetSessionId] = {
+        id: targetSessionId,
+        activeUrl: payload.activeUrl,
+        activePluginId: payload.activePluginId || "youtube",
+        media: payload.media || { time: 0, paused: false },
+        features: { ytTitle: payload.title },
+        rules: room.sessions[targetSessionId]?.rules || {},
+        lastUpdate: Date.now(),
+      };
+
+      member.activeUrl = payload.activeUrl;
+      member.title = payload.title || "Vidéo en cours";
+      if (payload.media?.time !== undefined) member.time = payload.media.time;
+      if (payload.media?.paused !== undefined) member.paused = payload.media.paused;
+
+      if (isUrlChanged) {
+        monitor.recordMediaChange({
+          memberId: member.id,
+          userName: member.name,
+          roomId: room.id,
+          sessionId: targetSessionId,
+          previousUrl,
+          newUrl: payload.activeUrl,
+          title: member.title,
+          time: member.time,
+          paused: member.paused,
+        });
+      }
+
+      broadcastMembers(room);
+    }
+  );
+
+  // --- 4. BASCULE EN MODE SOLO (Compatibilité) ---
+  socket.on("SWITCH_TO_SOLO", (payload?: { activeUrl?: string; title?: string }) => {
+    const room = getRoom();
+    if (!room) return;
+
+    const member = room.members.find((m) => m.id === socket.id);
+    if (!member) return;
+
+    const soloSessionId = `solo_${socket.id.substring(0, 6)}_${Date.now().toString(36)}`;
+    member.sessionId = soloSessionId;
+    if (payload?.activeUrl) member.activeUrl = payload.activeUrl;
+    if (payload?.title) member.title = payload.title;
+
+    room.sessions[soloSessionId] = {
+      id: soloSessionId,
+      activeUrl: payload?.activeUrl || null,
+      activePluginId: null,
+      media: null,
+      features: { ytTitle: payload?.title },
+      rules: {},
+      lastUpdate: Date.now(),
+    };
+
+    socket.emit("SESSION_CHANGED", { sessionId: soloSessionId });
+    broadcastMembers(room);
+    console.log(`[SESSION] ${member.name} (${socket.id}) switched to solo session ${soloSessionId}`);
+  });
+
+  // --- 5. REJOINDRE LA SESSION D'UN AMI (Watch with) ---
+  socket.on("JOIN_SESSION", ({ sessionId }: { sessionId: string }) => {
+    const room = getRoom();
+    if (!room || !sessionId) return;
+
+    const targetSession = room.sessions[sessionId];
+    if (!targetSession) return;
+
+    const member = room.members.find((m) => m.id === socket.id);
+    if (!member) return;
+
+    member.sessionId = sessionId;
+    member.activeUrl = targetSession.activeUrl;
+    member.title = targetSession.features?.ytTitle;
+
+    const { state, ts } = getExtrapolatedSession(targetSession);
+    socket.emit("SESSION_CHANGED", { sessionId });
+    socket.emit("SYNC_ORDER", {
+      sessionId,
+      ts,
+      data: {
+        ...state,
+        activeUrl: targetSession.activeUrl,
+      },
+    });
+    broadcastMembers(room);
+    console.log(`[SESSION] 🤝 ${member.name} a rejoint la session ${sessionId} (${targetSession.activeUrl})`);
+  });
+
+  // --- 6. DIFFUSER SA SESSION À TOUT LE SALON ---
+  socket.on("BROADCAST_SESSION", (payload?: { sessionId?: string }) => {
+    const room = getRoom();
+    if (!room) return;
+
+    const member = room.members.find((m) => m.id === socket.id);
+    if (!member) return;
+
+    const targetSessionId = payload?.sessionId || member.sessionId;
+    const targetSession = room.sessions[targetSessionId];
+    if (!targetSession) return;
+
+    room.defaultSessionId = targetSessionId;
+    const otherMembers = room.members.filter((m) => m.id !== socket.id);
+
+    otherMembers.forEach((m) => {
+      m.sessionId = targetSessionId;
+      m.activeUrl = targetSession.activeUrl;
+      m.title = targetSession.features?.ytTitle;
+    });
+
+    const { state, ts } = getExtrapolatedSession(targetSession);
+
+    // Envoi de l'ordre de synchronisation UNIQUEMENT aux autres membres (pas d'écho à l'émetteur)
+    otherMembers.forEach((m) => {
+      io.to(m.id).emit("SESSION_CHANGED", { sessionId: targetSessionId });
+      io.to(m.id).emit("SYNC_ORDER", {
+        sessionId: targetSessionId,
+        ts,
+        data: {
+          ...state,
+          activeUrl: targetSession.activeUrl,
+        },
+      });
+    });
+
+    broadcastMembers(room);
+    console.log(`[SESSION] 📢 ${member.name} a diffusé sa session ${targetSessionId} à tous les membres`);
+  });
+
+  // --- 7. DEMANDE DE SYNCHRO FRAÎCHE (Rattrapage volontaire) ---
+  socket.on("REQUEST_SYNC", (payload?: { sessionId?: string }) => {
+    const room = getRoom();
+    if (!room) return;
+
+    const member = room.members.find((m) => m.id === socket.id);
+    const sessionId = payload?.sessionId || member?.sessionId || room.defaultSessionId;
+    const targetSession = room.sessions[sessionId];
+    if (!targetSession) return;
+
+    const { state, ts } = getExtrapolatedSession(targetSession);
+    socket.emit("SYNC_ORDER", {
+      sessionId,
+      ts,
+      data: {
+        ...state,
+        activeUrl: targetSession.activeUrl,
+      },
+    });
+  });
+
+  // --- 8. TRANSMISSION D'ACTIONS DANS UNE SESSION ---
+  socket.on(
+    "SEND_ACTION",
+    (packet: { sessionId?: string; ts?: number; data: any }) => {
+      const room = getRoom();
+      if (!room || !packet.data) return;
+
+      const member = room.members.find((m) => m.id === socket.id);
+      if (!member) return;
+
+      // AUTORITÉ DU SERVEUR : le socket agit TOUJOURS sur member.sessionId
+      const sessionId = member.sessionId;
+
+      let session = room.sessions[sessionId];
+      if (!session) {
+        session = {
+          id: sessionId,
+          activeUrl: member.activeUrl || null,
+          activePluginId: null,
+          media: null,
+          features: {},
+          rules: {},
+          lastUpdate: Date.now(),
+        };
+        room.sessions[sessionId] = session;
+      }
+
+      // Application des règles et réactions au sein de la session
+      const rules = session.rules || {};
+      const enhancedData = { ...packet.data };
+
+      const processReactions = (obj: any, parentPath = "") => {
+        for (const key in obj) {
+          const currentPath = parentPath ? `${parentPath}.${key}` : key;
+          const val = obj[key];
+
+          const rule = rules[currentPath];
+          if (rule && rule.reactions) {
+            let shouldApply = true;
+
+            // Logique collective : on attend les membres de la même session
+            if (rule.collective && val === false) {
+              const anyoneElseInSession = room.members.some((m) => {
+                if (m.id === socket.id || m.sessionId !== sessionId) return false;
+                const keys = currentPath.split(".");
+                let current: any = m;
+                for (const k of keys) {
+                  if (current && current[k] !== undefined) {
+                    current = current[k];
+                  } else {
+                    return false;
+                  }
+                }
+                return current === true;
+              });
+              if (anyoneElseInSession) shouldApply = false;
+            }
+
+            if (shouldApply) {
+              const reaction = rule.reactions[String(val)];
+              if (reaction) {
+                Object.keys(reaction).forEach((targetPath) => {
+                  setValue(enhancedData, targetPath, reaction[targetPath]);
+                });
+              }
+            }
+          }
+
+          if (val !== null && typeof val === "object" && !Array.isArray(val)) {
+            processReactions(val, currentPath);
+          }
+        }
+      };
+
+      processReactions(packet.data);
+
+      // Mise à jour de la session
+      room.sessions[sessionId] = deepMerge(session, enhancedData);
+      room.sessions[sessionId].lastUpdate = Date.now();
+
+      // Mise à jour de la présence du membre
+      if (packet.data.activeUrl !== undefined) {
+        member.activeUrl = packet.data.activeUrl;
+      }
+      if (packet.data.features?.ytTitle) {
+        member.title = packet.data.features.ytTitle;
+      }
+      if (packet.data.media?.time !== undefined) {
+        member.time = packet.data.media.time;
+      }
+      if (packet.data.media?.paused !== undefined) {
+        member.paused = packet.data.media.paused;
+      }
+
+      // Relais STRICTEMENT AUX AUTRES MEMBRES DE LA MÊME SESSION
+      const peersInSession = room.members.filter(
+        (m) => m.sessionId === sessionId && m.id !== socket.id
+      );
+
+      peersInSession.forEach((peer) => {
+        io.to(peer.id).emit("SYNC_ORDER", {
+          sessionId,
+          ts: room.sessions[sessionId].lastUpdate,
+          data: enhancedData,
+        });
+        monitor.logMessage({
+          socketId: peer.id,
+          userName: peer.name,
+          roomId: room.id,
+          direction: "OUT",
+          event: "SYNC_ORDER",
+          data: { sessionId, patch: enhancedData },
+        });
       });
 
       broadcastMembers(room);
     }
   );
 
-  socket.on("SEND_ACTION", (packet: { ts: number; data: any }) => {
-    const room = getRoom();
-    if (!room || !packet.data) return;
-
-    // 🟢 REACTION ENGINE : Le serveur applique les conséquences prévues dans les règles
-    const rules = room.state.rules || {};
-    const enhancedData = { ...packet.data };
-
-    // On parcourt les changements envoyés par le client
-    // (Ex: si packet.data contient { features: { isAd: true } })
-    const processReactions = (obj: any, parentPath = "") => {
-      for (const key in obj) {
-        const currentPath = parentPath ? `${parentPath}.${key}` : key;
-        const val = obj[key];
-
-        // Est-ce qu'une règle définit une réaction pour cette clé ?
-        const rule = rules[currentPath];
-        if (rule && rule.reactions) {
-          let shouldApply = true;
-
-          // 🧠 LOGIQUE COLLECTIVE : "On attend tout le monde"
-          if (rule.collective && val === false) {
-            const anyoneElse = room.members.some((m) => {
-              if (m.id === socket.id) return false; // On ne se compte pas soi-même
-              // On cherche dans le chemin précis de la feature
-              // Ex: m.features.isAd
-              const keys = currentPath.split(".");
-              let current: any = m;
-              for (const k of keys) {
-                if (current && current[k] !== undefined) {
-                  current = current[k];
-                } else {
-                  return false;
-                }
-              }
-              return current === true;
-            });
-            if (anyoneElse) {
-              // ⛔ Quelqu'un d'autre est encore bloqué !
-              // On refuse simplement d'appliquer la reprise (shouldApply = false)
-              // On laisse le client gérer son propre retour à l'état attendu
-              shouldApply = false;
-            }
-          }
-
-          if (shouldApply) {
-            const reaction = rule.reactions[String(val)];
-            if (reaction) {
-              Object.keys(reaction).forEach((targetPath) => {
-                setValue(enhancedData, targetPath, reaction[targetPath]);
-              });
-            }
-          }
-        }
-
-        // Récursivité pour les objets imbriqués
-        if (val !== null && typeof val === "object" && !Array.isArray(val)) {
-          processReactions(val, currentPath);
-        }
-      }
-    };
-
-    processReactions(packet.data);
-
-    // On met à jour les features du membre qui parle (pour la sidebar)
-    const member = room.members.find((m) => m.id === socket.id);
-    if (member && packet.data.features) {
-      member.features = deepMerge(member.features || {}, packet.data.features);
-      broadcastMembers(room);
-    }
-
-    // 🟢 Si une action média est ordonnée, elle s'applique à TOUS les membres du salon
-    if (enhancedData.media) {
-      room.members.forEach((m) => {
-        m.lastMedia = deepMerge(m.lastMedia || {}, enhancedData.media);
-        m.lastHeartbeatTs = Date.now();
-      });
-    }
-
-    // Mise à jour de l'état global et broadcast
-    room.state = deepMerge(room.state, enhancedData);
-    room.lastUpdate = Date.now();
-
-    socket.broadcast
-      .to(room.id)
-      .emit("SYNC_ORDER", { ts: packet.ts, data: enhancedData });
-
-    console.log(`[SYNC] Action relayed (+reactions) for room ${room.id}`);
-  });
-
-  socket.on("SEND_HEARTBEAT", (packet: { ts: number; data: any }) => {
-    const room = getRoom();
-    if (!room) return;
-
-    const member = room.members.find((m) => m.id === socket.id);
-    if (member) {
-      member.lastHeartbeatTs = Date.now();
-      if (packet.data?.media) {
-        member.lastMedia = deepMerge(member.lastMedia || {}, packet.data.media);
-      }
-    }
-
-    if (socket.id === room.hostId && packet.data?.media) {
-      room.state.media = deepMerge(room.state.media || {}, packet.data.media);
-      room.lastUpdate = Date.now();
-    }
-
-    const now = Date.now();
-    let minTime = Infinity;
-    let maxTime = -Infinity;
-
-    const telemetryReport = room.members.map((m) => {
-      let estimatedTime = null;
-
-      if (m.lastMedia && m.lastMedia.time !== undefined && m.lastHeartbeatTs) {
-        const timeSinceLastHb = (now - m.lastHeartbeatTs) / 1000;
-        const speed = m.lastMedia.playbackRate || room.state.media?.playbackRate || 1;
-        const isPaused =
-          m.lastMedia.paused !== undefined
-            ? m.lastMedia.paused
-            : (room.state.media?.paused ?? true);
-        const isPlaying = !isPaused;
-        estimatedTime = m.lastMedia.time + (isPlaying ? timeSinceLastHb * speed : 0);
-
-        if (estimatedTime < minTime) minTime = estimatedTime;
-        if (estimatedTime > maxTime) maxTime = estimatedTime;
-      }
-
-      return {
-        id: m.id,
-        name: m.name,
-        time: estimatedTime,
-        paused: m.lastMedia?.paused ?? room.state.media?.paused ?? true,
-        isHost: m.id === room.hostId,
-      };
-    });
-
-    if (minTime !== Infinity && maxTime !== -Infinity) {
-      const spread = maxTime - minTime;
-      const threshold = room.state.rules?.["media.time"]?.driftThreshold || 2.0;
-
-      if (spread > threshold) {
-        io.to(room.id).emit("ROOM_TELEMETRY", {
-          alert: true,
-          spread: parseFloat(spread.toFixed(2)),
-          members: telemetryReport,
-        });
-      }
-    }
-  });
-
+  // --- 9. DÉCONNEXION ---
   socket.on("disconnecting", () => {
     for (const roomId of socket.rooms) {
       if (roomId !== socket.id) {
         const room = rooms.get(roomId);
         if (room) {
           room.members = room.members.filter((m) => m.id !== socket.id);
+
+          // Nettoyage des sessions orphelines sans aucun membre
+          Object.keys(room.sessions).forEach((sId) => {
+            const hasMembers = room.members.some((m) => m.sessionId === sId);
+            if (!hasMembers && sId !== room.defaultSessionId) {
+              delete room.sessions[sId];
+            }
+          });
+
           if (room.members.length === 0) {
             rooms.delete(roomId);
+            console.log(`[ROOM] Room ${roomId} deleted (empty)`);
           } else {
             if (room.hostId === socket.id) {
               room.hostId = room.members[0].id;
