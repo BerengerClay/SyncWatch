@@ -1,7 +1,22 @@
 /**
  * SyncWatch - Synchronization Helpers
- * Logic extracted from SyncEngine to maintain a clean React component.
+ * Fonctions pures de calcul de diffs, d'extrapolation temporelle et de manipulation d'états.
  */
+
+// --- TYPES DE SYNCHRONISATION ---
+
+export type SyncRuleType = "CONTINUOUS" | "DISCRETE" | "IGNORED";
+
+export interface SyncRule {
+  type: SyncRuleType;
+  driftThreshold?: number;
+  speedKey?: string;
+  activeIfKey?: string;
+  activeInverted?: boolean;
+  blockingIfKey?: string;
+  collective?: boolean;
+  reactions?: Record<string, Record<string, any>>;
+}
 
 // --- BASIC OBJECT HELPERS ---
 
@@ -34,6 +49,44 @@ export const deepMerge = (target: any, source: any): any => {
   return output;
 };
 
+// --- URL & MEDIA COMPARISON HELPERS ---
+
+export const getCanonicalMediaId = (
+  rawUrl: string | null | undefined,
+): string | null => {
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl);
+
+    // 1. YouTube (watch?v= ou /shorts/ ou youtu.be)
+    if (parsed.hostname.includes("youtube.com")) {
+      const v = parsed.searchParams.get("v");
+      if (v) return `yt:${v}`;
+      const shortsMatch = parsed.pathname.match(/\/shorts\/([a-zA-Z0-9_-]+)/);
+      if (shortsMatch) return `yt:${shortsMatch[1]}`;
+    }
+    if (parsed.hostname === "youtu.be") {
+      const id = parsed.pathname.slice(1).split("?")[0];
+      if (id) return `yt:${id}`;
+    }
+
+    // 2. Cas Général : Origine + Pathname (ignore les query params de tracking comme ?t= ou &utm=)
+    return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");
+  } catch {
+    return rawUrl.trim();
+  }
+};
+
+export const isSameMedia = (
+  urlA: string | null | undefined,
+  urlB: string | null | undefined,
+): boolean => {
+  const idA = getCanonicalMediaId(urlA);
+  const idB = getCanonicalMediaId(urlB);
+  if (!idA || !idB) return false;
+  return idA === idB;
+};
+
 // --- SYNC CORE LOGIC ---
 
 /**
@@ -63,15 +116,13 @@ export const getIncrementalDiff = (
 
     // 1. Protection des données continues (Smart Detect + Dead Reckoning)
     if (rules && rules[path]?.type === "CONTINUOUS") {
-      const CAPTURE_THRESHOLD = 0.5; // Sensibilité de capture locale (500ms)
+      const CAPTURE_THRESHOLD = rules[path]?.driftThreshold || 1.5; // Seuil de saut (Seek) en lecture
       let threshold = CAPTURE_THRESHOLD;
 
       if (nowTs && lastTs) {
-        // 🟢 CORRECTION : On utilise rootNew pour lire les chemins absolus
         const speed =
           (rules[path].speedKey && getValue(rootNew, rules[path].speedKey)) ?? 1;
 
-        // 🟢 CORRECTION : On redevient Agnostique !
         const activeKey = rules[path].activeIfKey;
         const isActiveNow = activeKey ? !!getValue(rootNew, activeKey) : true;
         const wasActiveBefore =
@@ -82,23 +133,23 @@ export const getIncrementalDiff = (
         const realWasActiveBefore =
           rules[path].activeInverted ? !wasActiveBefore : wasActiveBefore;
 
-        // Smart Threshold : On garde la précision chirurgicale en pause
+        // Smart Threshold : En pause, seuil plus précis (300ms) car la vidéo ne bouge pas
         if (!realIsActiveNow && !realWasActiveBefore) {
-          threshold = 0.001; // Epsilon de sécurité (1ms)
+          threshold = 0.3;
         }
 
-        const deltaTimeSec = (nowTs - lastTs) / 1000;
+        const deltaTimeSec = Math.max(0, (nowTs - lastTs) / 1000);
         const projectedValue =
           valOld + (realWasActiveBefore ? deltaTimeSec * speed : 0);
         const drift = Math.abs(valNew - projectedValue);
 
-        // Si l'écart avec la prédiction est faible, on ignore
+        // Si l'écart avec la prédiction est faible, c'est l'avancement naturel : ON IGNORE
         if (drift < threshold) continue;
 
         console.log(
-          `[Sync] 🚀 Drift! Real: ${valNew.toFixed(3)}, Projected: ${projectedValue.toFixed(
-            3,
-          )}, Drift: ${drift.toFixed(3)} (Threshold: ${threshold})`,
+          `[Sync] 🎯 Seek détecté ! Réel: ${valNew.toFixed(2)}s, Projeté: ${projectedValue.toFixed(
+            2,
+          )}s (Drift: ${drift.toFixed(2)}s > Seuil: ${threshold}s)`,
         );
       } else {
         // Fallback sans temps
@@ -139,26 +190,6 @@ export const getIncrementalDiff = (
     }
   }
   return hasChanged ? patch : null;
-};
-
-/**
- * Filters the full state to only include necessary heartbeat data (Continuous fields that are active).
- */
-export const buildHeartbeatPayload = (fullState: any, rules: any) => {
-  const minimalistData: any = {};
-  if (!rules || !fullState) return minimalistData;
-
-  Object.keys(rules).forEach((path) => {
-    const rule = rules[path];
-    if (rule.type === "CONTINUOUS") {
-      const val = getValue(fullState, path);
-      if (val !== undefined && val !== null) {
-        setValue(minimalistData, path, val);
-      }
-    }
-  });
-
-  return minimalistData;
 };
 
 /**

@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { HomeScreen } from "./components/HomeScreen";
 import { GroupDashboard } from "./components/GroupDashboard";
 import { WatchScreen } from "./components/WatchScreen";
 import { socket, listenToServer } from "./services/socket";
 import { invoke } from "@tauri-apps/api/core";
+import { isSameMedia } from "./utils/syncHelpers";
 
 type AppState = "HOME" | "GROUP" | "WATCH";
 
@@ -12,10 +13,15 @@ function App() {
   const [roomId, setRoomId] = useState("");
   const [isHost, setIsHost] = useState(false);
   const [members, setMembers] = useState<any[]>([]);
-  const [activeUrl, setActiveUrl] = useState<string | null>(null); // NOUVEAU
-  const [activePluginId, setActivePluginId] = useState<string | null>(null); // NOUVEAU
+  const [activeUrl, setActiveUrl] = useState<string | null>(null);
+  const [activePluginId, setActivePluginId] = useState<string | null>(null);
   const [roomState, setRoomState] = useState<any>(null); // 🧠 Seed d'état pour le SyncEngine
   const [clockOffset, setClockOffset] = useState(0); // ⏱️ Différence entre serveur et local
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<Record<string, any>>({});
+
+  const stateRef = useRef<AppState>(state);
+  stateRef.current = state;
 
   useEffect(() => {
     // Écouter les événements de création/jointure
@@ -29,6 +35,8 @@ function App() {
         setRoomId(payload.roomId);
         setIsHost(true);
         if (payload.members) setMembers(payload.members);
+        if (payload.sessionId) setCurrentSessionId(payload.sessionId);
+        if (payload.sessions) setSessions(payload.sessions);
         setState("GROUP");
 
         invoke("set_view_mode", { mode: "HOME" });
@@ -36,11 +44,13 @@ function App() {
         setRoomId(payload.roomId);
         setIsHost(false);
         if (payload.members) setMembers(payload.members);
+        if (payload.sessionId) setCurrentSessionId(payload.sessionId);
+        if (payload.sessions) setSessions(payload.sessions);
 
         const initialState = payload.initialState || payload; // Fallback
         setRoomState(initialState);
 
-        if (initialState?.activePluginId) {
+        if (initialState?.activePluginId && initialState?.activeUrl) {
           const pluginId = initialState.activePluginId;
           setActivePluginId(pluginId);
 
@@ -49,35 +59,36 @@ function App() {
             data: initialState,
           });
 
-          if (initialState.activeUrl) {
-            invoke("set_view_mode", { 
-              mode: "WATCH", 
-              url: initialState.activeUrl 
-            });
-            setActiveUrl(initialState.activeUrl);
-          }
-
+          invoke("set_view_mode", { 
+            mode: "WATCH", 
+            url: initialState.activeUrl 
+          });
+          setActiveUrl(initialState.activeUrl);
           setState("WATCH");
         } else {
           setState("GROUP");
           invoke("set_view_mode", { mode: "HOME" });
         }
+      } else if (payload.type === "SESSION_CHANGED") {
+        if (payload.sessionId) setCurrentSessionId(payload.sessionId);
       } else if (payload.type === "MEMBERS_UPDATE") {
-        setMembers(payload.members || []);
+        if (payload.members) setMembers(payload.members);
+        if (payload.sessions) setSessions(payload.sessions);
       } else if (payload.type === "SYNC_ORDER") {
-        // Suivi automatique si l'on est au menu
-        if (
-          state !== "WATCH" &&
-          (payload.activePluginId || payload.data?.activePluginId)
-        ) {
+        // Suivi automatique si l'on est au menu du salon
+        if (stateRef.current !== "WATCH") {
           const s = payload.data || payload;
-          setRoomState(s);
-          setActivePluginId(s.activePluginId);
-          if (s.activeUrl) {
-            setActiveUrl(s.activeUrl);
-            invoke("set_view_mode", { mode: "WATCH", url: s.activeUrl });
+          if (s.activeUrl || s.activePluginId) {
+            setRoomState(s);
+            if (payload.sessionId) setCurrentSessionId(payload.sessionId);
+            const plugin = s.activePluginId || "youtube";
+            setActivePluginId(plugin);
+            if (s.activeUrl) {
+              setActiveUrl(s.activeUrl);
+              invoke("set_view_mode", { mode: "WATCH", url: s.activeUrl });
+            }
+            setState("WATCH");
           }
-          setState("WATCH");
         }
       }
     });
@@ -106,12 +117,14 @@ function App() {
 
   const handleSelectSource = (targetUrl: string, pluginId: string) => {
     setActivePluginId(pluginId);
+    setActiveUrl(null);
     invoke("set_view_mode", { mode: "WATCH", url: targetUrl });
     setState("WATCH");
   };
 
   const handleStopWatching = () => {
     setState("GROUP");
+    setActiveUrl(null);
     invoke("set_view_mode", { mode: "GROUP" });
   };
 
@@ -119,16 +132,34 @@ function App() {
     setState("HOME");
     setRoomId("");
     setIsHost(false);
+    setActiveUrl(null);
+    setActivePluginId(null);
+    setCurrentSessionId(null);
+    setSessions({});
     invoke("set_view_mode", { mode: "HOME" });
   };
 
   const handleAutoNavigate = (targetUrl: string | null) => {
-    if (targetUrl === activeUrl) return;
+    if (!targetUrl || isSameMedia(targetUrl, activeUrl)) return;
 
     console.log("[SyncWatch] 🧭 Auto-navigating to:", targetUrl);
     setActiveUrl(targetUrl);
     invoke("set_view_mode", { mode: "WATCH", url: targetUrl });
     if (state !== "WATCH") setState("WATCH");
+  };
+
+  const handleJoinSession = (sessionId: string) => {
+    console.log("[SyncWatch] 🎯 Joining session:", sessionId);
+    setCurrentSessionId(sessionId);
+    socket.emit("JOIN_SESSION", { sessionId });
+  };
+
+  const handleBroadcastSession = (sessionId?: string) => {
+    const target = sessionId || currentSessionId;
+    if (target) {
+      console.log("[SyncWatch] 📢 Broadcasting session to all members:", target);
+      socket.emit("BROADCAST_SESSION", { sessionId: target });
+    }
   };
 
   return (
@@ -155,9 +186,14 @@ function App() {
           activePluginId={activePluginId}
           initialRoomState={roomState}
           clockOffset={clockOffset}
+          currentSessionId={currentSessionId}
+          sessions={sessions}
           onLeave={handleLeave}
           onStop={handleStopWatching}
           onNavigate={handleAutoNavigate}
+          onSetActiveUrl={setActiveUrl}
+          onJoinSession={handleJoinSession}
+          onBroadcastSession={handleBroadcastSession}
         />
       )}
     </div>

@@ -151,7 +151,7 @@
           <i data-lucide="layers" class="w-4 h-4 text-purple-400"></i>
         </div>
         <div id="statSessions" class="text-xl font-black font-mono text-purple-400">0</div>
-        <div class="text-[10px] text-slate-500 mt-0.5">Groupes & solos</div>
+        <div class="text-[10px] text-slate-500 mt-0.5">Sessions actives</div>
       </div>
 
       <div class="glass-panel rounded-2xl p-4 flex flex-col justify-between border-amber-500/20 shadow-md">
@@ -254,7 +254,6 @@
             <select id="eventFilter" class="bg-slate-900 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-indigo-500 cursor-pointer">
               <option value="ALL">Événement: Tous</option>
               <option value="SEND_ACTION">SEND_ACTION</option>
-              <option value="USER_NAVIGATED">USER_NAVIGATED</option>
               <option value="SYNC_ORDER">SYNC_ORDER</option>
               <option value="MEMBERS_UPDATE">MEMBERS_UPDATE</option>
               <option value="JOIN_ROOM">JOIN_ROOM</option>
@@ -506,7 +505,8 @@
         const membersHtml = room.members.map(member => {
           const isJustChanged = mediaChangeTimestamps[member.id] && (Date.now() - mediaChangeTimestamps[member.id] < 8000);
           const flashClass = isJustChanged ? 'ring-2 ring-emerald-400 shadow-[0_0_25px_rgba(52,211,153,0.4)] animate-pulse' : 'border-white/10';
-          const isSolo = member.sessionId?.startsWith('solo_');
+          const sessionMemberCount = (room.members || []).filter(m => m.sessionId === member.sessionId).length;
+          const isGroup = sessionMemberCount > 1;
 
           return `
             <div class="p-4 rounded-xl bg-slate-900/60 border ${flashClass} transition-all duration-500 relative overflow-hidden group">
@@ -530,8 +530,8 @@
                     ${member.id === room.hostId ? `
                       <span class="px-1.5 py-0.2 rounded text-[8px] font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-500/30">HOST</span>
                     ` : ''}
-                    <span class="px-1.5 py-0.2 rounded text-[8px] font-black uppercase ${isSolo ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'}">
-                      ${isSolo ? 'SOLO' : 'GROUPE'}
+                    <span class="px-1.5 py-0.2 rounded text-[8px] font-black uppercase ${isGroup ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700/50'}">
+                      ${isGroup ? `GROUPE (${sessionMemberCount})` : 'INDIVIDUEL'}
                     </span>
                   </div>
                   <div class="flex items-center gap-2 text-[10px] text-slate-500 font-mono mt-0.5">
@@ -692,7 +692,7 @@
 
     // --- SOCKET.IO CLIENT CONNECTION ---
     function connectSocket() {
-      socket = io(window.location.origin);
+      socket = io(window.location.origin + "/admin");
 
       socket.on('connect', () => {
         console.log('[Dashboard] Connected to server socket:', socket.id);

@@ -1,4 +1,4 @@
-import { Server } from "socket.io";
+import { Server, Namespace } from "socket.io";
 
 export interface SocketLogEntry {
   id: string;
@@ -41,6 +41,7 @@ export interface ServerStats {
 
 class MonitorService {
   private io: Server | null = null;
+  private adminNamespace: Namespace | null = null;
   private logs: SocketLogEntry[] = [];
   private mediaChanges: MediaChangeEvent[] = [];
   private totalMessagesCount = 0;
@@ -50,6 +51,7 @@ class MonitorService {
 
   public init(io: Server) {
     this.io = io;
+    this.adminNamespace = io.of("/admin");
   }
 
   public logMessage(entry: Omit<SocketLogEntry, "id" | "timestamp">) {
@@ -65,8 +67,9 @@ class MonitorService {
       this.logs.pop();
     }
 
-    if (this.io) {
-      this.io.emit("ADMIN_LOG", fullEntry);
+    // Émission STRICTEMENT réservée aux dashboards connectés sur /admin
+    if (this.adminNamespace) {
+      this.adminNamespace.emit("ADMIN_LOG", fullEntry);
     }
   }
 
@@ -82,8 +85,9 @@ class MonitorService {
       this.mediaChanges.pop();
     }
 
-    if (this.io) {
-      this.io.emit("ADMIN_MEDIA_CHANGED", fullChange);
+    // Émission STRICTEMENT réservée aux dashboards connectés sur /admin
+    if (this.adminNamespace) {
+      this.adminNamespace.emit("ADMIN_MEDIA_CHANGED", fullChange);
     }
   }
 
@@ -122,8 +126,8 @@ class MonitorService {
   }
 
   public broadcastSnapshot(rooms: any[]) {
-    if (this.io) {
-      this.io.emit("ADMIN_SNAPSHOT", this.getSnapshot(rooms));
+    if (this.adminNamespace) {
+      this.adminNamespace.emit("ADMIN_SNAPSHOT", this.getSnapshot(rooms));
     }
   }
 }

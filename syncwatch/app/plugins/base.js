@@ -49,6 +49,7 @@ class BaseSyncPlugin extends SyncWatchCore {
         blockingIfKey: "media.seeking",
       },
       "media.seeking": { type: "IGNORED" },
+      "media.duration": { type: "IGNORED" },
       "activeUrl": { type: "IGNORED" },
       "features.isAd": {
         type: "DISCRETE",

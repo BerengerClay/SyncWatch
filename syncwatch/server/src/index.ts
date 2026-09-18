@@ -59,18 +59,20 @@ app.get(['/', '/dashboard'], (req, res) => {
     }
 });
 
+// Connexions des utilisateurs normaux (Application SyncWatch)
 io.on('connection', (socket) => {
-    console.log(`[IO] New connection: ${socket.id}`);
-
-    // Gestion spéciale pour le Dashboard d'administration
-    socket.on("ADMIN_GET_SNAPSHOT", () => {
-        socket.emit("ADMIN_SNAPSHOT", monitor.getSnapshot(getAllRooms()));
-    });
-
-    // Envoi immédiat du snapshot au cas où c'est un client dashboard
-    socket.emit("ADMIN_SNAPSHOT", monitor.getSnapshot(getAllRooms()));
-
+    console.log(`[IO] New user connection: ${socket.id}`);
     setupRoomHandlers(io, socket);
+});
+
+// Connexions isolées pour le Dashboard d'administration
+io.of('/admin').on('connection', (adminSocket) => {
+    console.log(`[ADMIN] Dashboard connected: ${adminSocket.id}`);
+    adminSocket.emit("ADMIN_SNAPSHOT", monitor.getSnapshot(getAllRooms()));
+
+    adminSocket.on("ADMIN_GET_SNAPSHOT", () => {
+        adminSocket.emit("ADMIN_SNAPSHOT", monitor.getSnapshot(getAllRooms()));
+    });
 });
 
 const PORT = process.env.PORT || 3001;

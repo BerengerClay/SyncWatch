@@ -1,8 +1,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { SyncEngine } from './SyncEngine';
-import { Crown, LogOut, Radio, Cpu, Square, Share2, Check, Tv } from 'lucide-react';
+import { Crown, LogOut, Radio, Cpu, Square, Share2, Check, Tv, UserPlus, Users } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { socket } from '../services/socket';
 
 // Indispensable pour que les plugins puissent utiliser React.createElement
 (window as any).React = React;
@@ -14,31 +13,40 @@ interface Props {
   activeUrl: string | null;
   activePluginId: string | null;
   clockOffset: number;
+  currentSessionId?: string | null;
+  sessions?: Record<string, any>;
   onLeave: () => void;
   onStop: () => void;
   onNavigate?: (targetUrl: string) => void;
+  onSetActiveUrl?: (targetUrl: string | null) => void;
+  onJoinSession?: (sessionId: string) => void;
+  onBroadcastSession?: (sessionId?: string) => void;
   initialRoomState?: any;
 }
 
 export const WatchScreen: React.FC<Props> = ({
   roomId,
   isHost,
-  members,
+  members = [],
   activeUrl,
   activePluginId,
   clockOffset,
+  currentSessionId,
+  sessions: _sessions = {},
   onLeave,
   onStop,
   onNavigate,
+  onSetActiveUrl,
+  onJoinSession,
+  onBroadcastSession,
   initialRoomState,
 }) => {
-  // 1. Les états bruts
-  const [mediaState, setMediaState] = useState<any>(null); // Null par défaut (IDLE)
+  const [mediaState, setMediaState] = useState<any>(null);
   const [featuresState, setFeaturesState] = useState<any>(null);
   const [currentLocalUrl, setCurrentLocalUrl] = useState<string | null>(activeUrl);
   const [isSharedFeedback, setIsSharedFeedback] = useState(false);
+  const [selectedMember, setSelectedMember] = useState<any>(null);
 
-  // 2. Le composant unique du plugin
   const [PluginUI, setPluginUI] = useState<React.FC<any> | null>(null);
   const lastCode = useRef<string | null>(null);
 
@@ -49,10 +57,9 @@ export const WatchScreen: React.FC<Props> = ({
       setCurrentLocalUrl(reportedUrl);
     }
 
-    // 🧠 GESTION DE L'ÉTAT (IDLE ou ACTIVE)
     if (media === null) {
       setMediaState(null);
-      setFeaturesState(null); // Cohérence avec media: null
+      setFeaturesState(null);
     } else if (media) {
       setMediaState((prev: any) => {
         if (!prev) return media;
@@ -60,12 +67,10 @@ export const WatchScreen: React.FC<Props> = ({
       });
     }
 
-    // Mise à jour des features (uniquement si on n'est pas en train de passer en IDLE)
     if (media !== null && features && Object.keys(features).length > 0) {
       setFeaturesState((prev: any) => ({ ...prev, ...features }));
     }
 
-    // Compilation du plugin
     if (sidebarCode && sidebarCode !== lastCode.current) {
       try {
         const factory = new Function('React', `return ${sidebarCode}`);
@@ -78,39 +83,43 @@ export const WatchScreen: React.FC<Props> = ({
   }, []);
 
   const handleControl = useCallback((command: string, data: any) => {
-    // Envoi au backend (Tauri)
     invoke('playback_control', { command, data }).catch(console.error);
 
-    // Mise à jour optimiste dans React (instantanéité visuelle)
     if (command === 'APPLY_STATE' && data.media) {
       setMediaState((prev: any) => ({ ...prev, ...data.media }));
     }
   }, []);
 
-  const handleBroadcastVideo = useCallback(() => {
+  // 📢 DIFFUSION À TOUT LE SALON
+  const handleBroadcast = useCallback(() => {
     const targetUrl = currentLocalUrl || activeUrl;
     if (!targetUrl) return;
 
-    console.log('[SyncWatch] 📡 Diffusion manuelle de la vidéo :', targetUrl);
+    console.log('[SyncWatch] 📢 Diffusion de ma session à tout le salon :', targetUrl);
 
-    socket.emit('SEND_ACTION', {
-      ts: Date.now() + clockOffset,
-      data: {
-        activeUrl: targetUrl,
-        activePluginId: activePluginId,
-        media: mediaState
-          ? {
-              time: mediaState.time || 0,
-              paused: mediaState.paused ?? true,
-              playbackRate: mediaState.playbackRate || 1.0,
-            }
-          : undefined,
-      },
-    });
+    if (onSetActiveUrl) {
+      onSetActiveUrl(targetUrl);
+    }
+
+    if (onBroadcastSession) {
+      onBroadcastSession(currentSessionId || undefined);
+    }
 
     setIsSharedFeedback(true);
     setTimeout(() => setIsSharedFeedback(false), 2000);
-  }, [currentLocalUrl, activeUrl, activePluginId, clockOffset, mediaState]);
+  }, [currentLocalUrl, activeUrl, onSetActiveUrl, onBroadcastSession, currentSessionId]);
+
+  // 🎯 REJOINDRE LA SESSION D'UN AMI
+  const handleJoinFriend = useCallback((member: any) => {
+    if (!member?.sessionId) return;
+    console.log('[SyncWatch] 🎯 Rejoindre la session de :', member.name);
+
+    if (onJoinSession) {
+      onJoinSession(member.sessionId);
+    }
+
+    setSelectedMember(null);
+  }, [onJoinSession]);
 
   const getDisplayDomain = (url: string | null) => {
     if (!url) return null;
@@ -120,6 +129,10 @@ export const WatchScreen: React.FC<Props> = ({
       return null;
     }
   };
+
+  const syncedMembers = members.filter((m) => m.sessionId === currentSessionId);
+  const otherMembers = members.filter((m) => m.sessionId !== currentSessionId);
+  const isAloneInSession = syncedMembers.length <= 1;
 
   return (
     <div className="relative flex flex-col h-screen w-full bg-gradient-to-b from-[#0f172a] via-[#020617] to-[#020617] text-slate-200 border-r border-white/5 shadow-2xl overflow-hidden font-sans select-none">
@@ -132,10 +145,11 @@ export const WatchScreen: React.FC<Props> = ({
           </div>
           <span className="font-black text-xs tracking-[0.2em] text-white/90">SYNCWATCH</span>
         </div>
+
         <div className="flex items-center gap-2">
           <button
             onClick={onStop}
-            className="flex items-center gap-1.5 bg-white/5 hover:bg-indigo-500/20 text-slate-400 hover:text-indigo-400 px-3 py-1.5 rounded-full border border-white/5 hover:border-indigo-500/20 text-[9px] font-black uppercase tracking-widest transition-all duration-300 active:scale-95"
+            className="flex items-center gap-1.5 bg-white/5 hover:bg-indigo-500/20 text-slate-400 hover:text-indigo-400 px-3 py-1.5 rounded-full border border-white/5 hover:border-indigo-500/20 text-[9px] font-black uppercase tracking-widest transition-all duration-300 active:scale-95 cursor-pointer"
           >
             <Square size={10} />
             STOP
@@ -146,9 +160,10 @@ export const WatchScreen: React.FC<Props> = ({
               <Crown size={10} /> HOST
             </span>
           )}
+
           <button
             onClick={onLeave}
-            className="flex items-center gap-1.5 bg-white/5 hover:bg-red-500/20 text-slate-400 hover:text-red-400 px-3 py-1.5 rounded-full border border-white/5 hover:border-red-500/20 text-[9px] font-black uppercase tracking-widest transition-all duration-300 active:scale-95"
+            className="flex items-center gap-1.5 bg-white/5 hover:bg-red-500/20 text-slate-400 hover:text-red-400 px-3 py-1.5 rounded-full border border-white/5 hover:border-red-500/20 text-[9px] font-black uppercase tracking-widest transition-all duration-300 active:scale-95 cursor-pointer"
           >
             <LogOut size={10} />
             LEAVE
@@ -156,47 +171,40 @@ export const WatchScreen: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* ── ROOM INDICATOR ── */}
-      <div className="px-5 py-2 bg-white/[0.01] border-b border-white/5 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <Radio size={12} className="text-indigo-400/60" />
-            <span className="text-[9px] text-slate-500 uppercase tracking-[0.3em] font-bold">Session</span>
+      {/* ── SESSION & PRESENCE BAR ── */}
+      <div className="px-5 py-2.5 bg-white/[0.01] border-b border-white/5 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5">
+            <Radio size={12} className={isAloneInSession ? 'text-indigo-400' : 'text-emerald-400 animate-pulse'} />
+            <span className="text-[9px] text-slate-300 uppercase tracking-[0.2em] font-bold">
+              {isAloneInSession ? 'Session (1 spectateur)' : `Session collective (${syncedMembers.length})`}
+            </span>
           </div>
 
-          {/* Connected Members */}
-          <div className="flex items-center gap-1.5">
+          {/* Members Avatars */}
+          <div className="flex items-center gap-1">
             <div className="flex -space-x-1.5">
-              {members.slice(0, 5).map((m, i) => {
-                const isAd = m.features?.isAd === true;
+              {members.map((m, i) => {
+                const isWithMe = m.sessionId === currentSessionId;
                 return (
-                  <div
+                  <button
                     key={m.id}
-                    title={isAd ? `[PUB] ${m.name}` : m.name}
-                    className={`w-5 h-5 rounded-full border border-[#020617] flex items-center justify-center text-[8px] font-black uppercase overflow-hidden transition-all duration-500 ${
-                      isAd
-                        ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)] ring-1 ring-red-500 animate-pulse'
-                        : 'bg-slate-800'
+                    onClick={() => setSelectedMember(m)}
+                    title={`${m.name} : ${m.title || 'En navigation'} ${isWithMe ? '(Avec vous)' : '(Cliquer pour voir)'}`}
+                    className={`w-5 h-5 rounded-full border border-[#020617] flex items-center justify-center text-[8px] font-black uppercase overflow-hidden transition-all duration-300 hover:scale-125 cursor-pointer ${
+                      isWithMe
+                        ? 'ring-1 ring-emerald-400/80 shadow-[0_0_8px_rgba(52,211,153,0.3)]'
+                        : 'opacity-70 hover:opacity-100 ring-1 ring-indigo-500/40'
                     }`}
                     style={{
-                      backgroundColor: isAd ? '' : `hsl(${(i * 137) % 360}, 60%, 40%)`,
+                      backgroundColor: `hsl(${(i * 137) % 360}, 60%, 40%)`,
                     }}
                   >
-                    {isAd ? 'AD' : m.name ? m.name.substring(0, 1) : '?'}
-                  </div>
+                    {m.name ? m.name.substring(0, 1) : '?'}
+                  </button>
                 );
               })}
-              {members.length > 5 && (
-                <div className="w-5 h-5 rounded-full border border-[#020617] bg-slate-900 flex items-center justify-center text-[7px] font-black text-slate-500">
-                  +{members.length - 5}
-                </div>
-              )}
             </div>
-            {members.length > 0 && (
-              <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest ml-1">
-                {members.length} {members.length > 1 ? 'members' : 'member'}
-              </span>
-            )}
           </div>
         </div>
 
@@ -207,7 +215,7 @@ export const WatchScreen: React.FC<Props> = ({
             if (target) {
               const originalText = target.innerText;
               target.innerText = 'COPIED!';
-              target.style.color = '#34d399'; // emerald-400
+              target.style.color = '#34d399';
               setTimeout(() => {
                 target.innerText = originalText;
                 target.style.color = '';
@@ -215,13 +223,39 @@ export const WatchScreen: React.FC<Props> = ({
             }
           }}
           className="font-mono text-[11px] text-indigo-400 font-black tracking-tight hover:text-white transition-colors cursor-pointer active:scale-95"
-          title="Click to copy"
+          title="Copier le code du salon"
         >
           {roomId}
         </button>
       </div>
 
-      {/* ── BROADCAST BAR (Diffusion manuelle) ── */}
+      {/* ── AUTRES SESSIONS EN LECTURE (Rejoindre en 1 clic) ── */}
+      {otherMembers.length > 0 && (
+        <div className="px-5 py-2 bg-indigo-950/20 border-b border-white/5 flex items-center justify-between gap-2 overflow-x-auto custom-scrollbar">
+          <div className="flex items-center gap-1.5 shrink-0 text-slate-400">
+            <Users size={11} className="text-indigo-400" />
+            <span className="text-[9px] font-bold uppercase tracking-wider">Autres sessions :</span>
+          </div>
+
+          <div className="flex items-center gap-2 overflow-x-auto">
+            {otherMembers.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => handleJoinFriend(m)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 hover:bg-emerald-500/20 text-slate-300 hover:text-emerald-300 border border-white/10 hover:border-emerald-500/30 text-[9px] font-medium transition-all shrink-0 active:scale-95 cursor-pointer"
+                title={`Rejoindre ${m.name} (${m.title || 'Vidéo'})`}
+              >
+                <UserPlus size={10} className="text-emerald-400" />
+                <span className="truncate max-w-[130px]">
+                  Rejoindre {m.name} {m.title ? `· ${m.title}` : ''}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── BROADCAST BAR ── */}
       <div className="px-5 py-2.5 bg-gradient-to-r from-indigo-950/30 via-slate-900/40 to-indigo-950/20 border-b border-white/5 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 min-w-0 overflow-hidden">
           <Tv size={13} className="text-indigo-400 shrink-0" />
@@ -231,14 +265,14 @@ export const WatchScreen: React.FC<Props> = ({
         </div>
 
         <button
-          onClick={handleBroadcastVideo}
+          onClick={handleBroadcast}
           disabled={!currentLocalUrl && !activeUrl}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[9px] font-black uppercase tracking-wider transition-all duration-300 shadow-md cursor-pointer shrink-0 active:scale-95 ${
             isSharedFeedback
               ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-emerald-500/20'
               : 'bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 hover:text-white border border-indigo-500/30 hover:border-indigo-500/60 shadow-indigo-500/10'
           }`}
-          title="Envoyer cette vidéo à tous les membres du salon"
+          title="Inviter tout le salon à regarder votre vidéo avec vous"
         >
           {isSharedFeedback ? (
             <>
@@ -248,7 +282,7 @@ export const WatchScreen: React.FC<Props> = ({
           ) : (
             <>
               <Share2 size={11} className="text-indigo-300" />
-              <span>Diffuser la vidéo</span>
+              <span>Diffuser à tous</span>
             </>
           )}
         </button>
@@ -257,17 +291,17 @@ export const WatchScreen: React.FC<Props> = ({
       {/* ── MAIN CONTENT (The Dumb Shell) ── */}
       <div className="flex-1 flex flex-col items-center justify-center overflow-hidden">
         {PluginUI ? (
-            <div className="w-full h-full flex flex-col">
-                <PluginUI 
-                  media={mediaState} 
-                  features={featuresState} 
-                  sendControl={handleControl} 
-                />
-            </div>
+          <div className="w-full h-full flex flex-col">
+            <PluginUI 
+              media={mediaState} 
+              features={featuresState} 
+              sendControl={handleControl} 
+            />
+          </div>
         ) : (
           <div className="flex flex-col items-center gap-6 opacity-10">
-              <Cpu size={64} className="text-white animate-pulse" />
-              <span className="text-[10px] font-black tracking-[0.5em] uppercase">LINKING...</span>
+            <Cpu size={64} className="text-white animate-pulse" />
+            <span className="text-[10px] font-black tracking-[0.5em] uppercase">LINKING...</span>
           </div>
         )}
       </div>
@@ -277,13 +311,52 @@ export const WatchScreen: React.FC<Props> = ({
         onUpdate={handleUpdate}
         onNavigate={onNavigate}
         activePluginId={activePluginId}
+        sessionActiveUrl={activeUrl}
+        currentSessionId={currentSessionId}
         initialRoomState={initialRoomState}
         clockOffset={clockOffset}
+        onSessionUrlChange={onSetActiveUrl}
       />
 
+      {/* ── MODAL INFO MEMBRE ── */}
+      {selectedMember && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-white/10 rounded-2xl p-5 max-w-xs w-full shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-sm text-white">{selectedMember.name}</span>
+              <button
+                onClick={() => setSelectedMember(null)}
+                className="text-slate-400 hover:text-white text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
 
+            <div className="text-xs text-slate-300 space-y-1.5">
+              <div className="text-[10px] uppercase font-bold text-slate-500">Actuellement :</div>
+              <div className="p-2 bg-white/5 rounded-lg text-slate-200 truncate font-medium text-[11px]">
+                {selectedMember.title || selectedMember.activeUrl || 'En navigation libre'}
+              </div>
+              <div className="text-[10px] text-slate-400">
+                Statut : {selectedMember.sessionId === currentSessionId ? '🟢 Dans votre session' : '🟡 Dans une autre session'}
+              </div>
+            </div>
 
-
+            <div className="flex items-center justify-end gap-2 pt-2">
+              {selectedMember.sessionId !== currentSessionId ? (
+                <button
+                  onClick={() => handleJoinFriend(selectedMember)}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer"
+                >
+                  Regarder avec lui
+                </button>
+              ) : (
+                <span className="text-[10px] text-emerald-400 font-bold">Déjà synchronisé</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
