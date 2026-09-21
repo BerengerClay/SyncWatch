@@ -84,6 +84,9 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
   // Field Locking : Map des clés verrouillées avec leur timestamp d'expiration
   const lockedFieldsRef = useRef<Map<string, number>>(new Map());
 
+  // Cooldown de montage : bloque les diffs pendant les premières secondes après un JOIN
+  const mountTimeRef = useRef<number>(Date.now());
+
   const currentMediaUrlRef = useRef<string | null>(
     sessionActiveUrl || initialRoomState?.activeUrl || null,
   );
@@ -149,9 +152,16 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
               expectedStateRef.current.initTs = Date.now();
               expectedStateRef.current.lastShot = undefined;
 
-              const { lastShot: _ls, initTs: _it, ts: _ts, ...stateOrder } = expectedStateRef.current as any;
+              const { lastShot: _ls, initTs: _it, ts: _ts, ...fullExpected } = expectedStateRef.current as any;
+              
+              const stateOrder: any = {};
+              for (const key in fullExpected) {
+                 const rule = rulesRef.current?.[key];
+                 if (!rule || rule.type === "IGNORED" || rule.readOnly) continue;
+                 stateOrder[key] = fullExpected[key];
+              }
 
-              lastStateRef.current = deepMerge(structuredClone(stateToDiff), stateOrder);
+              lastStateRef.current = deepMerge(structuredClone(stateToDiff), fullExpected);
               lastStateTsRef.current = Date.now();
 
               invoke("playback_control", {
@@ -170,6 +180,22 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
               });
             }
           }
+          return;
+        }
+
+        // Changement d'URL détecté localement (navigation de l'utilisateur)
+        // 🛡️ Si on vient de se monter avec un initialRoomState et que l'URL correspond
+        // à celle de la session, c'est l'arrivée normale — pas un changement utilisateur.
+        const isBootstrapNavigation = !!(initialRoomState?.activeUrl && 
+          isSameMedia(currentLocalUrl, initialRoomState.activeUrl) &&
+          Date.now() - mountTimeRef.current < 5000);
+
+        if (isBootstrapNavigation) {
+          // L'URL correspond à la session qu'on rejoint. On met à jour la ref sans émettre.
+          currentMediaUrlRef.current = currentLocalUrl;
+          onSessionUrlChangeRef.current?.(currentLocalUrl);
+          // On ne touche PAS à isApplyingStateRef ni expectedStateRef.
+          // Le système de convergence va s'en charger.
           return;
         }
 
@@ -219,8 +245,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
                 const expectedVal = expected[key];
                 const actualVal = actual[key];
                 const rule = rulesRef.current?.[key];
-
-                if (!rule || rule.type === "IGNORED") continue;
+                if (!rule || rule.type === "IGNORED" || rule.readOnly) continue;
 
                 if (rule.type === "CONTINUOUS") {
                   const elapsed = Math.max(0, (nowTs - (expected.ts || nowTs)) / 1000);
@@ -243,7 +268,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
                   for (const key in expected) {
                      if (key === "ts" || key === "lastShot" || key === "initTs") continue;
                      const rule = rulesRef.current?.[key];
-                     if (!rule || rule.type === "IGNORED") continue;
+                     if (!rule || rule.type === "IGNORED" || rule.readOnly) continue;
                      
                      if (key === "time" && isTargetPlaying) {
                         const elapsed = Math.max(0, (nowTs - (expected.ts || nowTs)) / 1000);
@@ -270,24 +295,51 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
         }
       }
 
+      // =========================================================================
+      // CALCUL DU DIFF INCRÉMENTAL & ÉMISSION SPONTANÉE
+      // =========================================================================
+      // 🛡️ Quand on applique un ordre du serveur ou qu'une pub est en cours,
+      // on bloque les diffs des champs contrôlables (time, paused, playbackRate)
+      // pour éviter les échos de seek/pause. Seuls les champs readOnly (ex: isAd)
+      // sont autorisés à passer — exactement comme l'ancien shouldBlockMediaDiff.
+      const isInMountCooldown = !!(initialRoomState && Date.now() - mountTimeRef.current < 3000);
+      const shouldBlockControllableDiffs = isApplyingStateRef.current || isAdActive || isInMountCooldown;
+
+      let stateForDiff: any;
+      if (shouldBlockControllableDiffs && rulesRef.current) {
+        stateForDiff = {};
+        for (const key in stateToDiff) {
+          if (rulesRef.current[key]?.readOnly) {
+            stateForDiff[key] = stateToDiff[key];
+          }
+        }
+      } else {
+        stateForDiff = stateToDiff;
+      }
+
       const patch = getIncrementalDiff(
-        stateToDiff,
+        stateForDiff,
         lastStateRef.current || {},
         rulesRef.current,
         ts,
         lastStateTsRef.current,
       );
 
-      if (patch && isApplyingStateRef.current && expectedStateRef.current) {
-         for (const key in patch) {
-            if (expectedStateRef.current[key] !== undefined) {
-               delete patch[key];
+      // Alignement mémoire : si les diffs contrôlables sont bloqués,
+      // on n'aligne que les champs readOnly pour éviter l'accumulation de drift
+      if (shouldBlockControllableDiffs) {
+        if (!lastStateRef.current) lastStateRef.current = {};
+        if (rulesRef.current) {
+          for (const key in stateToDiff) {
+            if (rulesRef.current[key]?.readOnly) {
+              lastStateRef.current[key] = stateToDiff[key];
             }
-         }
+          }
+        }
+      } else {
+        lastStateRef.current = structuredClone(stateToDiff);
+        lastStateTsRef.current = ts;
       }
-
-      lastStateRef.current = structuredClone(stateToDiff);
-      lastStateTsRef.current = ts;
 
       if (patch && Object.keys(patch).length > 0) {
         const expiry = Date.now() + 2500;
@@ -365,13 +417,15 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
            }
         }
 
-        patch = interpolatePatch(
-          patch,
-          rulesRef.current,
-          packet.ts,
-          clockOffsetRef.current,
-          lastStateRef.current,
-        );
+        if (patch.state) {
+          patch.state = interpolatePatch(
+            patch.state,
+            rulesRef.current,
+            packet.ts,
+            clockOffsetRef.current,
+            lastStateRef.current,
+          );
+        }
 
         if (patch.state !== undefined) {
           isApplyingStateRef.current = true;

@@ -82,15 +82,15 @@ export const extrapolateSession = (
   Object.keys(rules).forEach((path) => {
     const rule = rules[path];
     if (rule.type === "CONTINUOUS") {
-      const speed = rule.speedKey ? getValue(session, rule.speedKey) || 1 : 1;
-      const active = rule.activeIfKey ? getValue(session, rule.activeIfKey) : true;
+      const speed = rule.speedKey ? getValue(session.state, rule.speedKey) || 1 : 1;
+      const active = rule.activeIfKey ? getValue(session.state, rule.activeIfKey) : true;
       const isRunning = rule.activeInverted ? !active : active;
 
       if (isRunning) {
-        const baseValue = getValue(session, path);
+        const baseValue = getValue(session.state, path);
         if (typeof baseValue === "number") {
           const extrapolated = baseValue + timeDiff * speed;
-          setValue(extrapolatedState, path, extrapolated);
+          setValue(extrapolatedState.state, path, extrapolated);
         }
       }
     }
@@ -111,6 +111,7 @@ export const processReactions = (
   senderSocketId: string
 ): any => {
   const enhancedData = { ...data };
+  if (!enhancedData.state) return enhancedData;
 
   const walk = (obj: any, parentPath = "") => {
     for (const key in obj) {
@@ -125,8 +126,9 @@ export const processReactions = (
         if (rule.collective && val === false) {
           const anyoneElseInSession = room.members.some((m) => {
             if (m.id === senderSocketId || m.sessionId !== sessionId) return false;
+            if (!m.state) return false;
             const keys = currentPath.split(".");
-            let current: any = m;
+            let current: any = m.state;
             for (const k of keys) {
               if (current && current[k] !== undefined) {
                 current = current[k];
@@ -143,7 +145,7 @@ export const processReactions = (
           const reaction = rule.reactions[String(val)];
           if (reaction) {
             Object.keys(reaction).forEach((targetPath) => {
-              setValue(enhancedData, targetPath, reaction[targetPath]);
+              setValue(enhancedData.state, targetPath, reaction[targetPath]);
             });
           }
         }
@@ -155,6 +157,6 @@ export const processReactions = (
     }
   };
 
-  walk(data);
+  walk(data.state);
   return enhancedData;
 };

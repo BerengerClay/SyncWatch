@@ -53,6 +53,7 @@ class BaseSyncPlugin extends SyncWatchCore {
       "isAd": {
         type: "DISCRETE",
         collective: true,
+        readOnly: true,
         reactions: {
           true: { "paused": true },
           false: { "paused": false },
