@@ -1,0 +1,17 @@
+site_name: SyncWatch Documentation
+site_description: Documentation technique du moteur de synchronisation agnostique
+theme:
+  name: material
+  palette:
+    scheme: slate
+    primary: indigo
+    accent: emerald
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - toc.integrate
+nav:
+  - Accueil: index.md
+  - Architecture: architecture.md
+  - Moteur de Synchronisation: sync-engine.md
+  - Système de Plugins: plugins.md
