@@ -554,8 +554,8 @@
                   </div>
                 </div>
 
-                <div class="font-semibold text-xs text-slate-200 truncate" title="${member.title || 'Aucun titre'}">
-                  ${member.title || 'En navigation / Recherche'}
+                <div class="font-semibold text-xs text-slate-200 truncate" title="${member.features?.title || 'Aucun titre'}">
+                  ${member.features?.title || (member.activeUrl ? 'Lecture en cours' : 'Dans le salon')}
                 </div>
 
                 <div class="text-[10px] text-slate-500 font-mono truncate" title="${member.activeUrl || 'Pas d\'URL'}">
@@ -618,7 +618,7 @@
             </div>
 
             <div class="text-xs font-semibold text-slate-200 truncate pt-0.5">
-              ${t.title || 'Nouvelle vidéo'}
+              ${t.features?.title || 'Nouvelle vidéo'}
             </div>
 
             <div class="text-[9px] text-slate-400 font-mono truncate">

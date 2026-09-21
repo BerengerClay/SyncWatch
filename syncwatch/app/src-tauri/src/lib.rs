@@ -130,34 +130,38 @@ async fn set_view_mode(app: AppHandle, mode: String, url: Option<String>) -> Res
                 let full_script = get_plugin_script_for_url(&target_url);
 
                 if cfg!(target_os = "linux") {
-                    if let Some(old_player) = app.get_webview_window("player") {
-                        let _ = old_player.close();
+                    if let Some(player_win) = app.get_webview_window("player") {
+                        let js = format!("window.location.href = '{}';", target_url);
+                        let _ = player_win.eval(&js);
+                    } else {
+                        let _player_win = tauri::webview::WebviewWindowBuilder::new(&app, "player", parsed_url)
+                            .title("SyncWatch Player")
+                            .inner_size(960.0, 540.0)
+                            .user_agent(WIN_UA)
+                            .initialization_script(&full_script)
+                            .build()
+                            .map_err(|e| e.to_string())?;
                     }
-                    let _player_win = tauri::webview::WebviewWindowBuilder::new(&app, "player", parsed_url)
-                        .title("SyncWatch Player")
-                        .inner_size(960.0, 540.0)
-                        .user_agent(WIN_UA)
-                        .initialization_script(&full_script)
-                        .build()
-                        .map_err(|e| e.to_string())?;
                 } 
                 else {
-                    // Si un player existe déjà (changement de vidéo), on le ferme avant d'en recréer un
-                    if let Some(old_p) = app.get_webview("player") {
-                        let _ = old_p.close();
+                    // Si un player existe déjà, on navigue simplement et instantanément vers la nouvelle URL
+                    if let Some(player) = app.get_webview("player") {
+                        let js = format!("window.location.href = '{}';", target_url);
+                        let _ = player.eval(&js);
+                        update_layout(&app);
+                    } else {
+                        let builder = tauri::webview::WebviewBuilder::new("player", parsed_url)
+                            .user_agent(WIN_UA)
+                            .initialization_script(&full_script);
+
+                        let _ = main_window.add_child(
+                            builder, 
+                            tauri::Position::Logical(tauri::LogicalPosition::new(SIDEBAR_WIDTH, 0.0)), 
+                            tauri::Size::Logical(tauri::LogicalSize::new(800.0, 600.0))
+                        ).map_err(|e| e.to_string())?;
+                        
+                        update_layout(&app);
                     }
-
-                    let builder = tauri::webview::WebviewBuilder::new("player", parsed_url)
-                        .user_agent(WIN_UA)
-                        .initialization_script(&full_script);
-
-                    let _ = main_window.add_child(
-                        builder, 
-                        tauri::Position::Logical(tauri::LogicalPosition::new(SIDEBAR_WIDTH, 0.0)), 
-                        tauri::Size::Logical(tauri::LogicalSize::new(800.0, 600.0))
-                    ).map_err(|e| e.to_string())?;
-                    
-                    update_layout(&app);
                 }
             }
         }

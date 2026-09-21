@@ -5,15 +5,27 @@ class YouTubePlugin extends BaseSyncPlugin {
   }
 
   getCurrentUrl() {
-    const isVideoPage = window.location.href.includes("watch?v=");
-
-    if (this.videoElement && isVideoPage) {
-      this.url = window.location.href;
-      return this.url;
-    } else if (this.videoElement && this.url) {
-      return this.url;
+    try {
+      const u = new URL(window.location.href);
+      const v = u.searchParams.get("v");
+      if (v) {
+        return `https://www.youtube.com/watch?v=${v}`;
+      }
+      const shorts = u.pathname.match(/\/shorts\/([a-zA-Z0-9_-]+)/);
+      if (shorts) {
+        return `https://www.youtube.com/shorts/${shorts[1]}`;
+      }
+      return `${u.origin}${u.pathname}`;
+    } catch {
+      return window.location.href;
     }
-    return window.location.href;
+  }
+
+  getSyncRules() {
+    return {
+      ...super.getSyncRules(),
+      "features.title": { type: "IGNORED" },
+    };
   }
 
   // Vérifie si on est devant une pub (Scanner de Shadow DOM exhaustif)
@@ -70,13 +82,13 @@ class YouTubePlugin extends BaseSyncPlugin {
       document.querySelector("yt-formatted-string.ytd-video-primary-info-renderer");
 
     if (title && title.innerText.trim()) {
-      return { ytTitle: title.innerText.trim() };
+      return { title: title.innerText.trim() };
     }
 
     // Si on est en pub, on essaie de choper le titre de la pub dans le player
     const adTitle = document.querySelector(".ytp-title-link");
     if (adTitle && adTitle.innerText.trim()) {
-      return { ytTitle: "[PUB] " + adTitle.innerText.trim() };
+      return { title: "[PUB] " + adTitle.innerText.trim() };
     }
 
     return {};
@@ -100,7 +112,7 @@ class YouTubePlugin extends BaseSyncPlugin {
             key: 'yt-title',
             className: 'text-center font-bold text-white tracking-tight leading-tight',
             style: { fontSize: 'clamp(1.5rem, 6vw, 1.8rem)', display: '-webkit-box', WebkitLineClamp: '3', WebkitBoxOrient: 'vertical', overflow: 'hidden' }
-        }, features?.ytTitle || 'Chargement...'),
+        }, features?.title || 'Chargement...'),
     ])`;
   }
 }

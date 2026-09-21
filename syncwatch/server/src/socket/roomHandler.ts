@@ -4,6 +4,7 @@ import {
   createRoom,
   joinRoom,
   joinSession,
+  leaveSessionToLobby,
   broadcastSessionToRoom,
   handleVideoNavigation,
   updateSessionState,
@@ -84,7 +85,7 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
   });
 
   // =========================================================================
-  // 2. REJOINDRE LE SALON
+  // 2. REJOINDRE LE SALON (Toujours dans le lobby avec session vierge)
   // =========================================================================
   socket.on(
     "JOIN_ROOM",
@@ -93,24 +94,20 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
       if (!result) return socket.emit("ERROR", "Room not found");
 
       const { room, targetSessionId } = result;
-      const targetSession = room.sessions[targetSessionId];
-      const { state, ts } = extrapolateSession(targetSession);
 
       socket.join(roomId);
       socket.emit("JOIN_SUCCESS", {
         roomId,
         hostId: room.hostId,
         sessionId: targetSessionId,
-        ts,
-        initialState: targetSession.activeUrl
-          ? { ...state, activeUrl: targetSession.activeUrl }
-          : null,
+        ts: Date.now(),
+        initialState: null,
         members: room.members,
         sessions: room.sessions,
       });
 
       broadcastMembers(room);
-      console.log(`[ROOM] User ${userName} (${socket.id}) joined room ${roomId}`);
+      console.log(`[ROOM] User ${userName} (${socket.id}) joined room ${roomId} in lobby`);
     }
   );
 
@@ -138,6 +135,21 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
     });
 
     broadcastMembers(room);
+  });
+
+  // =========================================================================
+  // 3b. QUITTER UNE SESSION POUR RETOURNER DANS LE LOBBY
+  // =========================================================================
+  socket.on("LEAVE_SESSION", () => {
+    const room = getRoom();
+    if (!room) return;
+
+    const result = leaveSessionToLobby(room, socket.id);
+    if (!result) return;
+
+    socket.emit("SESSION_CHANGED", { sessionId: result.newSessionId });
+    broadcastMembers(room);
+    console.log(`[ROOM] User ${socket.id} returned to lobby (${result.newSessionId})`);
   });
 
   // =========================================================================
@@ -228,7 +240,7 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
           sessionId: navResult.newSessionId,
           previousUrl: prevUrl,
           newUrl: packet.data.activeUrl,
-          title: packet.data.features?.ytTitle || member.title,
+          features: packet.data.features || member.features,
           time: packet.data.media?.time ?? member.time,
           paused: packet.data.media?.paused ?? member.paused,
         });
@@ -248,18 +260,28 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
       socket.id
     );
 
-    // Mise à jour de l'état de la session
-    updateSessionState(room, sessionId, enhancedData);
-
     // Mise à jour de la présence du membre
     if (packet.data.activeUrl !== undefined) member.activeUrl = packet.data.activeUrl;
-    if (packet.data.features?.ytTitle) member.title = packet.data.features.ytTitle;
+    if (packet.data.features) {
+      member.features = { ...(member.features || {}), ...packet.data.features };
+    }
     if (packet.data.media?.time !== undefined) member.time = packet.data.media.time;
     if (packet.data.media?.paused !== undefined) member.paused = packet.data.media.paused;
 
-    // Diffusion de l'ordre de lecture à toute la salle
-    // Chaque client filtre localement selon son sessionId
-    socket.broadcast.to(room.id).emit("SYNC_ORDER", {
+    // 🛡️ Arbitrage collectif : la session reste en pause tant qu'au moins un membre a une pub
+    const isAnyoneInSessionInAd = room.members.some(
+      (m) => m.sessionId === sessionId && m.features?.isAd === true
+    );
+
+    if (isAnyoneInSessionInAd && enhancedData.media?.paused === false) {
+      enhancedData.media.paused = true;
+    }
+
+    // Mise à jour de l'état de la session
+    updateSessionState(room, sessionId, enhancedData);
+
+    // Diffusion de l'ordre de lecture à TOUTE la salle (y compris l'émetteur)
+    io.to(room.id).emit("SYNC_ORDER", {
       sessionId,
       ts: session.lastUpdate,
       data: enhancedData,

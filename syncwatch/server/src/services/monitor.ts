@@ -20,7 +20,7 @@ export interface MediaChangeEvent {
   sessionId: string;
   previousUrl?: string | null;
   newUrl: string | null;
-  title?: string;
+  features?: Record<string, any>;
   time?: number;
   paused?: boolean;
 }

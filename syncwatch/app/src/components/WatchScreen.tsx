@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { SyncEngine } from './SyncEngine';
-import { Crown, LogOut, Radio, Cpu, Square, Share2, Check, Tv, UserPlus, Users } from 'lucide-react';
+import { Crown, LogOut, Radio, Cpu, Square, Tv, UserPlus, Users } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
 // Indispensable pour que les plugins puissent utiliser React.createElement
@@ -38,13 +38,11 @@ export const WatchScreen: React.FC<Props> = ({
   onNavigate,
   onSetActiveUrl,
   onJoinSession,
-  onBroadcastSession,
   initialRoomState,
 }) => {
   const [mediaState, setMediaState] = useState<any>(null);
   const [featuresState, setFeaturesState] = useState<any>(null);
   const [currentLocalUrl, setCurrentLocalUrl] = useState<string | null>(activeUrl);
-  const [isSharedFeedback, setIsSharedFeedback] = useState(false);
   const [selectedMember, setSelectedMember] = useState<any>(null);
 
   const [PluginUI, setPluginUI] = useState<React.FC<any> | null>(null);
@@ -90,24 +88,6 @@ export const WatchScreen: React.FC<Props> = ({
     }
   }, []);
 
-  // 📢 DIFFUSION À TOUT LE SALON
-  const handleBroadcast = useCallback(() => {
-    const targetUrl = currentLocalUrl || activeUrl;
-    if (!targetUrl) return;
-
-    console.log('[SyncWatch] 📢 Diffusion de ma session à tout le salon :', targetUrl);
-
-    if (onSetActiveUrl) {
-      onSetActiveUrl(targetUrl);
-    }
-
-    if (onBroadcastSession) {
-      onBroadcastSession(currentSessionId || undefined);
-    }
-
-    setIsSharedFeedback(true);
-    setTimeout(() => setIsSharedFeedback(false), 2000);
-  }, [currentLocalUrl, activeUrl, onSetActiveUrl, onBroadcastSession, currentSessionId]);
 
   // 🎯 REJOINDRE LA SESSION D'UN AMI
   const handleJoinFriend = useCallback((member: any) => {
@@ -128,6 +108,11 @@ export const WatchScreen: React.FC<Props> = ({
     } catch {
       return null;
     }
+  };
+
+  const getFeatureLabel = (features: any) => {
+    if (!features) return null;
+    return features.title || features.name || null;
   };
 
   const syncedMembers = members.filter((m) => m.sessionId === currentSessionId);
@@ -190,7 +175,7 @@ export const WatchScreen: React.FC<Props> = ({
                   <button
                     key={m.id}
                     onClick={() => setSelectedMember(m)}
-                    title={`${m.name} : ${m.title || 'En navigation'} ${isWithMe ? '(Avec vous)' : '(Cliquer pour voir)'}`}
+                    title={`${m.name} : ${getFeatureLabel(m.features) || m.title || 'En navigation'} ${isWithMe ? '(Avec vous)' : '(Cliquer pour voir)'}`}
                     className={`w-5 h-5 rounded-full border border-[#020617] flex items-center justify-center text-[8px] font-black uppercase overflow-hidden transition-all duration-300 hover:scale-125 cursor-pointer ${
                       isWithMe
                         ? 'ring-1 ring-emerald-400/80 shadow-[0_0_8px_rgba(52,211,153,0.3)]'
@@ -243,11 +228,11 @@ export const WatchScreen: React.FC<Props> = ({
                 key={m.id}
                 onClick={() => handleJoinFriend(m)}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 hover:bg-emerald-500/20 text-slate-300 hover:text-emerald-300 border border-white/10 hover:border-emerald-500/30 text-[9px] font-medium transition-all shrink-0 active:scale-95 cursor-pointer"
-                title={`Rejoindre ${m.name} (${m.title || 'Vidéo'})`}
+                title={`Rejoindre ${m.name} (${getFeatureLabel(m.features) || m.title || 'Vidéo'})`}
               >
                 <UserPlus size={10} className="text-emerald-400" />
                 <span className="truncate max-w-[130px]">
-                  Rejoindre {m.name} {m.title ? `· ${m.title}` : ''}
+                  Rejoindre {m.name} {getFeatureLabel(m.features) || m.title ? `· ${getFeatureLabel(m.features) || m.title}` : ''}
                 </span>
               </button>
             ))}
@@ -260,32 +245,10 @@ export const WatchScreen: React.FC<Props> = ({
         <div className="flex items-center gap-2 min-w-0 overflow-hidden">
           <Tv size={13} className="text-indigo-400 shrink-0" />
           <span className="text-[10px] font-semibold text-slate-400 truncate">
-            {featuresState?.ytTitle || getDisplayDomain(currentLocalUrl || activeUrl) || 'En direct'}
+            {getFeatureLabel(featuresState) || getDisplayDomain(currentLocalUrl || activeUrl) || 'En direct'}
           </span>
         </div>
 
-        <button
-          onClick={handleBroadcast}
-          disabled={!currentLocalUrl && !activeUrl}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[9px] font-black uppercase tracking-wider transition-all duration-300 shadow-md cursor-pointer shrink-0 active:scale-95 ${
-            isSharedFeedback
-              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-emerald-500/20'
-              : 'bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 hover:text-white border border-indigo-500/30 hover:border-indigo-500/60 shadow-indigo-500/10'
-          }`}
-          title="Inviter tout le salon à regarder votre vidéo avec vous"
-        >
-          {isSharedFeedback ? (
-            <>
-              <Check size={11} className="text-emerald-400" />
-              <span>Diffusé !</span>
-            </>
-          ) : (
-            <>
-              <Share2 size={11} className="text-indigo-300" />
-              <span>Diffuser à tous</span>
-            </>
-          )}
-        </button>
       </div>
 
       {/* ── MAIN CONTENT (The Dumb Shell) ── */}
@@ -335,7 +298,7 @@ export const WatchScreen: React.FC<Props> = ({
             <div className="text-xs text-slate-300 space-y-1.5">
               <div className="text-[10px] uppercase font-bold text-slate-500">Actuellement :</div>
               <div className="p-2 bg-white/5 rounded-lg text-slate-200 truncate font-medium text-[11px]">
-                {selectedMember.title || selectedMember.activeUrl || 'En navigation libre'}
+                {getFeatureLabel(selectedMember.features) || selectedMember.title || selectedMember.activeUrl || 'En navigation libre'}
               </div>
               <div className="text-[10px] text-slate-400">
                 Statut : {selectedMember.sessionId === currentSessionId ? '🟢 Dans votre session' : '🟡 Dans une autre session'}

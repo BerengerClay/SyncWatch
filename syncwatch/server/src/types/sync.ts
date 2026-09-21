@@ -20,10 +20,9 @@ export interface MemberPresence {
   name: string;
   sessionId: string;
   activeUrl?: string | null;
-  title?: string;
+  features?: Record<string, any>;
   time?: number;
   paused?: boolean;
-  isAd?: boolean;
 }
 
 export interface WatchSession {

@@ -100,7 +100,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
   const expectedTargetUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (sessionActiveUrl && !currentMediaUrlRef.current) {
+    if (sessionActiveUrl && !currentMediaUrlRef.current && !expectedTargetUrlRef.current) {
       currentMediaUrlRef.current = sessionActiveUrl;
     }
   }, [sessionActiveUrl]);
@@ -150,45 +150,87 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       isLocalAdActiveRef.current = isAdActive;
 
       // 🔄 GESTION DU CHANGEMENT DE VIDÉO
-      if (currentLocalUrl && !isSameMedia(currentLocalUrl, currentMediaUrlRef.current)) {
-        const isExpected =
-          expectedTargetUrlRef.current &&
-          isSameMedia(currentLocalUrl, expectedTargetUrlRef.current);
+      const isExpectingNavigation = !!expectedTargetUrlRef.current;
+      const isUrlDifferent = !!(currentLocalUrl && !isSameMedia(currentLocalUrl, currentMediaUrlRef.current));
 
-        currentMediaUrlRef.current = currentLocalUrl;
-        lastStateRef.current = structuredClone(stateToDiff);
-        lastStateTsRef.current = ts;
+      if (isExpectingNavigation || isUrlDifferent) {
+        // CAS 1 & 2 : On attend une navigation ordonnée par le serveur
+        if (expectedTargetUrlRef.current) {
+          if (isSameMedia(currentLocalUrl, expectedTargetUrlRef.current)) {
+            // ⏳ URL correcte mais le <video> n'est pas encore monté dans le DOM
+            // → On ne confirme PAS l'arrivée, sinon l'APPLY_STATE est silencieusement ignoré par le plugin
+            if (!fullState.media) {
+              console.log("[SyncEngine] ⏳ URL correcte mais vidéo pas encore montée, on attend...");
+              return;
+            }
 
-        if (isExpected) {
-          // Arrivée sur la vidéo ordonnée par la session : on laisse la machine converger
-          console.log("[SyncEngine] 🎯 Arrivée sur la vidéo ordonnée :", currentLocalUrl);
-          expectedTargetUrlRef.current = null;
-          return;
-        } else {
-          // Navigation spontanée de l'utilisateur (clic sur une vidéo)
-          console.log("[SyncEngine] 🔀 Navigation spontanée détectée vers :", currentLocalUrl);
-          expectedStateRef.current = undefined;
-          isApplyingStateRef.current = false;
+            // ✅ Arrivée confirmée ET <video> présent → on peut appliquer l'état
+            console.log("[SyncEngine] 🎯 Arrivée confirmée sur la vidéo ordonnée :", currentLocalUrl);
+            currentMediaUrlRef.current = currentLocalUrl;
+            onSessionUrlChangeRef.current?.(currentLocalUrl);
+            expectedTargetUrlRef.current = null;
 
-          socket.emit("SEND_ACTION", {
-            sessionId: currentSessionIdRef.current,
-            ts: Date.now() + clockOffsetRef.current,
-            data: {
-              activeUrl: currentLocalUrl,
-              features: { ytTitle: fullState.features?.ytTitle },
-              media: fullState.media,
-              rules: fullState.rules || rulesRef.current,
-            },
-          });
+            // Réarmement du bouclier MAINTENANT (le <video> vient d'apparaître)
+            if (expectedStateRef.current) {
+              expectedStateRef.current.initTs = Date.now();
+              expectedStateRef.current.lastShot = undefined;
 
-          // Sortie immédiate : pas de diff calculé sur la trame d'initialisation
+              // Extraire les champs purement "media" pour l'APPLY_STATE (sans les métadonnées internes)
+              const { lastShot: _ls, initTs: _it, ts: _ts, ...mediaOrder } = expectedStateRef.current as any;
+
+              // Aligner la mémoire sur l'état ordonné (pas sur le 0s transitoire du player)
+              lastStateRef.current = deepMerge(structuredClone(stateToDiff), { media: mediaOrder });
+              lastStateTsRef.current = Date.now();
+
+              invoke("playback_control", {
+                command: "APPLY_STATE",
+                data: { media: mediaOrder },
+              });
+            } else {
+              lastStateRef.current = structuredClone(stateToDiff);
+              lastStateTsRef.current = ts;
+            }
+            // 📢 Si on commence directement sur une pub, on notifie immédiatement le serveur
+            // pour mettre en pause les autres membres de la session
+            if (isAdActive && currentSessionIdRef.current) {
+              console.log("[SyncEngine] 📢 Pub détectée à l'arrivée, notification de la session...");
+              socket.emit("SEND_ACTION", {
+                sessionId: currentSessionIdRef.current,
+                ts: Date.now() + clockOffsetRef.current,
+                data: { features: { isAd: true } },
+              });
+            }
+          } else {
+            // 🗑️ Trame résiduelle de l'ancien player pendant la navigation → ignorer
+            console.log("[SyncEngine] 🗑️ Trame résiduelle ignorée :", currentLocalUrl);
+          }
           return;
         }
+
+        // CAS 3 : Aucune navigation attendue → navigation spontanée de l'utilisateur
+        console.log("[SyncEngine] 🔀 Navigation spontanée détectée vers :", currentLocalUrl);
+        currentMediaUrlRef.current = currentLocalUrl;
+        onSessionUrlChangeRef.current?.(currentLocalUrl);
+        lastStateRef.current = structuredClone(stateToDiff);
+        lastStateTsRef.current = ts;
+        expectedStateRef.current = undefined;
+        isApplyingStateRef.current = false;
+
+        socket.emit("SEND_ACTION", {
+          sessionId: currentSessionIdRef.current,
+          ts: Date.now() + clockOffsetRef.current,
+          data: {
+            activeUrl: currentLocalUrl,
+            media: fullState.media || undefined,
+          },
+        });
+        return;
       }
 
       // Sortie de publicité : reprise automatique de l'état ordonné
       if (wasAdActive && !isAdActive && isApplyingStateRef.current && expectedStateRef.current) {
-        const { lastShot, ...mediaOrder } = expectedStateRef.current as any;
+        expectedStateRef.current.initTs = Date.now();
+        const { lastShot: _ls, initTs: _it, ts: _ts, ...mediaOrder } = expectedStateRef.current as any;
         invoke("playback_control", {
           command: "APPLY_STATE",
           data: { media: mediaOrder },
@@ -206,82 +248,88 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
             expectedStateRef.current = undefined;
             isApplyingStateRef.current = false;
           }
-          return;
-        }
+        } else if (actual !== null && !isAdActive) {
+          // Si les règles ne sont pas encore chargées, on ne peut pas valider la convergence
+          if (rulesRef.current && Object.keys(rulesRef.current).length > 0) {
+            const nowTs = Date.now();
+            // Timeout de sécurité : après 4s, on libère le moteur pour ne jamais bloquer l'UI
+            const initAge = nowTs - (expected.initTs || nowTs);
+            if (initAge > 4000) {
+              console.warn("[SyncEngine] ⚠️ Timeout de convergence dépassé (4s), libération du bouclier");
+              expectedStateRef.current = undefined;
+              isApplyingStateRef.current = false;
+              lastStateRef.current = structuredClone(stateToDiff);
+              lastStateTsRef.current = ts;
+            } else {
+              let isMissionAccomplished = true;
+              const isTargetPlaying = expected.paused !== undefined ? !expected.paused : !actual.paused;
 
-        if (actual === null || isAdActive) return;
+              for (const key in expected) {
+                if (key === "ts" || key === "lastShot" || key === "initTs") continue;
+                const expectedVal = expected[key];
+                const actualVal = actual[key];
+                const path = `media.${key}`;
+                const rule = rulesRef.current?.[path];
 
-        const nowTs = Date.now();
-        // Timeout de sécurité : après 2.5s, on libère le moteur pour ne jamais bloquer l'UI
-        const initAge = nowTs - (expected.initTs || nowTs);
-        if (initAge > 2500) {
-          expectedStateRef.current = undefined;
-          isApplyingStateRef.current = false;
-          lastStateRef.current = structuredClone(stateToDiff);
-          lastStateTsRef.current = ts;
-          return;
-        }
+                // Ne vérifier que les champs avec une règle DISCRETE ou CONTINUOUS
+                // Les champs IGNORED (duration, seeking) et inconnus ne doivent pas bloquer la convergence
+                if (!rule || rule.type === "IGNORED") continue;
 
-        let isMissionAccomplished = true;
-        const isPlaying = !actual.paused;
+                if (rule.type === "CONTINUOUS") {
+                  // En lecture, la cible temporelle avance avec le temps écoulé (Dead-Reckoning)
+                  const elapsed = Math.max(0, (nowTs - (expected.ts || nowTs)) / 1000);
+                  const speed = actual.playbackRate || expected.playbackRate || 1.0;
+                  const targetTime = isTargetPlaying ? expectedVal + elapsed * speed : expectedVal;
 
-        for (const key in expected) {
-          if (key === "ts" || key === "lastShot" || key === "initTs") continue;
-          const expectedVal = expected[key];
-          const actualVal = actual[key];
-          const path = `media.${key}`;
-          const rule = rulesRef.current?.[path];
+                  if (Math.abs(targetTime - actualVal) > 1.2) {
+                    isMissionAccomplished = false;
+                    break;
+                  }
+                } else if (expectedVal !== actualVal) {
+                  isMissionAccomplished = false;
+                  break;
+                }
+              }
 
-          if (rule?.type === "CONTINUOUS") {
-            // En lecture, la cible temporelle avance avec le temps écoulé (Dead-Reckoning)
-            const elapsed = Math.max(0, (nowTs - (expected.ts || nowTs)) / 1000);
-            const speed = actual.playbackRate || expected.playbackRate || 1.0;
-            const targetTime = isPlaying ? expectedVal + elapsed * speed : expectedVal;
-
-            if (Math.abs(targetTime - actualVal) > 1.2) {
-              isMissionAccomplished = false;
-              break;
+              if (!isMissionAccomplished) {
+                // Relance si nécessaire (throttled à 1s) — on n'envoie que les champs contrôlables
+                if (!expected.lastShot || nowTs - expected.lastShot > 1000) {
+                  const mediaOrder: any = {};
+                  if (expected.paused !== undefined) mediaOrder.paused = expected.paused;
+                  if (expected.playbackRate !== undefined) mediaOrder.playbackRate = expected.playbackRate;
+                  if (expected.time !== undefined) {
+                    if (isTargetPlaying) {
+                      const elapsed = Math.max(0, (nowTs - (expected.ts || nowTs)) / 1000);
+                      const speed = actual.playbackRate || expected.playbackRate || 1.0;
+                      mediaOrder.time = expected.time + elapsed * speed;
+                    } else {
+                      mediaOrder.time = expected.time;
+                    }
+                  }
+                  invoke("playback_control", {
+                    command: "APPLY_STATE",
+                    data: { media: mediaOrder },
+                  });
+                  expected.lastShot = nowTs;
+                }
+              } else {
+                lastStateRef.current = structuredClone(stateToDiff);
+                lastStateTsRef.current = ts;
+                expectedStateRef.current = undefined;
+                isApplyingStateRef.current = false;
+              }
             }
-          } else if (expectedVal !== actualVal) {
-            isMissionAccomplished = false;
-            break;
           }
-        }
-
-        if (!isMissionAccomplished) {
-          // Relance si nécessaire (throttled à 1s)
-          if (!expected.lastShot || nowTs - expected.lastShot > 1000) {
-            const { ts: _t, lastShot: _ls, initTs: _it, ...mediaOrder } = expected;
-            if (mediaOrder.time !== undefined && isPlaying) {
-              const elapsed = Math.max(0, (nowTs - (expected.ts || nowTs)) / 1000);
-              const speed = actual.playbackRate || expected.playbackRate || 1.0;
-              mediaOrder.time = expected.time + elapsed * speed;
-            }
-            invoke("playback_control", {
-              command: "APPLY_STATE",
-              data: { media: mediaOrder },
-            });
-            expected.lastShot = nowTs;
-          }
-          return;
-        }
-
-        if (isMissionAccomplished) {
-          lastStateRef.current = structuredClone(stateToDiff);
-          lastStateTsRef.current = ts;
-          expectedStateRef.current = undefined;
-          isApplyingStateRef.current = false;
-          return; // 🛑 Stabilisé sur l'ordre du serveur : ne jamais émettre d'écho !
         }
       }
-
-      // Tant qu'on applique un ordre distant, on bloque toute émission de diff
-      if (isApplyingStateRef.current) return;
 
       // =========================================================================
       // CALCUL DU DIFF INCRÉMENTAL & ÉMISSION SPONTANÉE
       // =========================================================================
-      const stateForDiff = isAdActive ? { features: stateToDiff.features } : stateToDiff;
+      // 🛡️ Si on applique un ordre ou si une pub est en cours, on bloque les diffs "media"
+      // pour éviter les échos de seek/pause, mais on laisse toujours passer les "features" (ex: isAd).
+      const shouldBlockMediaDiff = isApplyingStateRef.current || isAdActive;
+      const stateForDiff = shouldBlockMediaDiff ? { features: stateToDiff.features } : stateToDiff;
       const effectiveRules: Record<string, SyncRule> = {
         ...(rulesRef.current || {}),
         activeUrl: { type: "IGNORED" },
@@ -297,9 +345,14 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
         lastStateTsRef.current,
       );
 
-      // On aligne toujours la référence locale sur la trame actuelle pour ne pas fausser le prochain Seek
-      lastStateRef.current = structuredClone(stateToDiff);
-      lastStateTsRef.current = ts;
+      // On aligne la mémoire : si le média est protégé, on n'aligne que les features
+      if (shouldBlockMediaDiff) {
+        if (!lastStateRef.current) lastStateRef.current = {};
+        lastStateRef.current.features = structuredClone(stateToDiff.features);
+      } else {
+        lastStateRef.current = structuredClone(stateToDiff);
+        lastStateTsRef.current = ts;
+      }
 
       if (patch) {
         console.log("[SyncEngine] 📤 Action utilisateur émise :", patch);
@@ -321,6 +374,15 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
         return;
       }
 
+      // 🔑 Changement immédiat de session locale
+      if (packet.type === "SESSION_CHANGED") {
+        if (packet.sessionId) {
+          console.log("[SyncEngine] 🔑 Session locale mise à jour :", packet.sessionId);
+          currentSessionIdRef.current = packet.sessionId;
+        }
+        return;
+      }
+
       let patch = null;
 
       if (packet.type === "JOIN_SUCCESS") {
@@ -339,12 +401,17 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       }
 
       if (patch) {
+        if (patch.rules && Object.keys(patch.rules).length > 0) {
+          rulesRef.current = patch.rules;
+        }
+
+        let isNavigatingToNewUrl = false;
+
         // Changement d'URL ordonné par la session (Rejoindre / Broadcast)
         if (patch.activeUrl && !isSameMedia(currentMediaUrlRef.current, patch.activeUrl)) {
           console.log("[SyncEngine] 🧭 Ordre de navigation vers l'URL :", patch.activeUrl);
+          isNavigatingToNewUrl = true;
           expectedTargetUrlRef.current = patch.activeUrl;
-          currentMediaUrlRef.current = patch.activeUrl;
-          onSessionUrlChangeRef.current?.(patch.activeUrl);
 
           if (onNavigateRef.current) {
             onNavigateRef.current(patch.activeUrl);
@@ -364,6 +431,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
         if (patch.media !== undefined) {
           isApplyingStateRef.current = true;
           expectedStateRef.current = {
+            ...(expectedStateRef.current || {}),
             ...patch.media,
             initTs: Date.now(),
             ts: Date.now(),
@@ -374,7 +442,9 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
         lastStateTsRef.current = packet.ts ? packet.ts - clockOffsetRef.current : Date.now();
 
         // Application au lecteur local Webview
-        if (!isLocalAdActiveRef.current) {
+        // ⚠️ Si on vient d'ordonner une navigation, on ne seek pas l'ancienne vidéo !
+        // L'état attendu est conservé dans expectedStateRef et s'appliquera dès l'arrivée sur la nouvelle vidéo.
+        if (!isLocalAdActiveRef.current && !isNavigatingToNewUrl) {
           invoke("playback_control", { command: "APPLY_STATE", data: patch });
         }
 

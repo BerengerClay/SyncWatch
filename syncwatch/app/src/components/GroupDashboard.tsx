@@ -1,16 +1,15 @@
 import React from 'react';
-import { Tv, Crown, MessageSquare, Settings, Share2 } from 'lucide-react';
+import { Tv, Crown, MessageSquare, Settings, Share2, UserPlus } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
 interface Props {
   roomId: string;
   isHost: boolean;
   members: any[];
+  currentSessionId?: string | null;
   onSelectSource: (targetUrl: string, pluginId: string) => void;
+  onJoinSession?: (sessionId: string) => void;
 }
-
-
-
 
 interface Plugin {
   name: string;
@@ -19,20 +18,29 @@ interface Plugin {
   script_filename: string;
 }
 
-export const GroupDashboard: React.FC<Props> = ({ roomId, isHost, members, onSelectSource }) => {
-
-
+export const GroupDashboard: React.FC<Props> = ({
+  roomId,
+  isHost,
+  members,
+  currentSessionId,
+  onSelectSource,
+  onJoinSession,
+}) => {
   const [plugins, setPlugins] = React.useState<Plugin[]>([]);
 
   React.useEffect(() => {
     invoke('get_plugins').then((res: any) => setPlugins(res)).catch(console.error);
   }, []);
 
+  const activeStreams = members.filter(
+    (m) => m.activeUrl && m.sessionId && m.sessionId !== currentSessionId
+  );
+
   return (
     <div className="flex flex-col h-screen w-full bg-[#020617] text-white p-10 font-sans overflow-hidden">
       
       {/* HEADER */}
-      <div className="flex items-center justify-between mb-12 max-w-6xl mx-auto w-full shrink-0">
+      <div className="flex items-center justify-between mb-8 max-w-6xl mx-auto w-full shrink-0">
         <div className="space-y-1">
           <div className="flex items-center gap-3">
              <div className="w-2.5 h-2.5 bg-emerald-400 rounded-full animate-pulse shadow-[0_0_12px_rgba(52,211,153,0.6)]" />
@@ -75,10 +83,58 @@ export const GroupDashboard: React.FC<Props> = ({ roomId, isHost, members, onSel
 
       <div className="grid grid-cols-12 gap-12 max-w-6xl mx-auto w-full flex-1 overflow-hidden">
         
-        {/* SOURCES GRID */}
+        {/* MAIN COLUMN */}
         <div className="col-span-8 flex flex-col min-h-0">
+          
+          {/* EN COURS DE LECTURE (SESSIONS ACTIVES) */}
+          {activeStreams.length > 0 && (
+            <div className="mb-6 flex flex-col gap-3 shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+                <h3 className="text-[11px] font-black uppercase tracking-[0.3em] text-emerald-400">
+                  En direct dans le salon ({activeStreams.length})
+                </h3>
+              </div>
+              <div className="flex flex-col gap-2.5">
+                {activeStreams.map((m) => (
+                  <div
+                    key={m.id}
+                    className="flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-emerald-950/30 via-slate-900/50 to-slate-900/30 border border-emerald-500/20 backdrop-blur-md hover:border-emerald-500/40 transition-all shadow-lg"
+                  >
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold shrink-0">
+                        <Tv size={18} />
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black text-white">{m.name}</span>
+                          <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase tracking-wider">
+                            {m.paused ? '⏸ En pause' : '▶ En lecture'}
+                          </span>
+                        </div>
+                        <span className="text-xs text-slate-400 truncate max-w-[340px] mt-0.5">
+                          {m.features?.title || m.features?.name || 'Vidéo en cours'}
+                        </span>
+                      </div>
+                    </div>
+                    {onJoinSession && (
+                      <button
+                        onClick={() => onJoinSession(m.sessionId)}
+                        className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider transition-all duration-300 shadow-md hover:scale-105 active:scale-95 shrink-0 cursor-pointer"
+                      >
+                        <UserPlus size={14} />
+                        Rejoindre
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* SOURCES GRID */}
           <div className="flex items-center justify-between mb-4 px-1 shrink-0">
-            <h3 className="text-[11px] font-black uppercase tracking-[0.3em] text-slate-500">Select Stream Source</h3>
+            <h3 className="text-[11px] font-black uppercase tracking-[0.3em] text-slate-500">Lancer une source</h3>
             <span className="text-[11px] font-medium text-slate-600 italic">{plugins.length} Sources Available</span>
           </div>
           

@@ -133,9 +133,9 @@ export const getIncrementalDiff = (
         const realWasActiveBefore =
           rules[path].activeInverted ? !wasActiveBefore : wasActiveBefore;
 
-        // Smart Threshold : En pause, seuil plus précis (300ms) car la vidéo ne bouge pas
+        // Smart Threshold : On garde la précision chirurgicale en pause (1ms pour l'image par image)
         if (!realIsActiveNow && !realWasActiveBefore) {
-          threshold = 0.3;
+          threshold = 0.001;
         }
 
         const deltaTimeSec = Math.max(0, (nowTs - lastTs) / 1000);

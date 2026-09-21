@@ -4,7 +4,6 @@ import { GroupDashboard } from "./components/GroupDashboard";
 import { WatchScreen } from "./components/WatchScreen";
 import { socket, listenToServer } from "./services/socket";
 import { invoke } from "@tauri-apps/api/core";
-import { isSameMedia } from "./utils/syncHelpers";
 
 type AppState = "HOME" | "GROUP" | "WATCH";
 
@@ -23,6 +22,9 @@ function App() {
   const stateRef = useRef<AppState>(state);
   stateRef.current = state;
 
+  const currentSessionIdRef = useRef<string | null>(currentSessionId);
+  currentSessionIdRef.current = currentSessionId;
+
   useEffect(() => {
     // Écouter les événements de création/jointure
     const unbind = listenToServer((payload: any) => {
@@ -35,7 +37,10 @@ function App() {
         setRoomId(payload.roomId);
         setIsHost(true);
         if (payload.members) setMembers(payload.members);
-        if (payload.sessionId) setCurrentSessionId(payload.sessionId);
+        if (payload.sessionId) {
+          setCurrentSessionId(payload.sessionId);
+          currentSessionIdRef.current = payload.sessionId;
+        }
         if (payload.sessions) setSessions(payload.sessions);
         setState("GROUP");
 
@@ -44,49 +49,45 @@ function App() {
         setRoomId(payload.roomId);
         setIsHost(false);
         if (payload.members) setMembers(payload.members);
-        if (payload.sessionId) setCurrentSessionId(payload.sessionId);
+        if (payload.sessionId) {
+          setCurrentSessionId(payload.sessionId);
+          currentSessionIdRef.current = payload.sessionId;
+        }
         if (payload.sessions) setSessions(payload.sessions);
 
-        const initialState = payload.initialState || payload; // Fallback
-        setRoomState(initialState);
-
-        if (initialState?.activePluginId && initialState?.activeUrl) {
-          const pluginId = initialState.activePluginId;
-          setActivePluginId(pluginId);
-
-          invoke("playback_control", {
-            command: "APPLY_STATE",
-            data: initialState,
-          });
-
-          invoke("set_view_mode", { 
-            mode: "WATCH", 
-            url: initialState.activeUrl 
-          });
-          setActiveUrl(initialState.activeUrl);
-          setState("WATCH");
-        } else {
-          setState("GROUP");
-          invoke("set_view_mode", { mode: "HOME" });
-        }
+        // Arrivée systématique sur le Dashboard (Option A)
+        setState("GROUP");
+        invoke("set_view_mode", { mode: "HOME" });
       } else if (payload.type === "SESSION_CHANGED") {
-        if (payload.sessionId) setCurrentSessionId(payload.sessionId);
+        if (payload.sessionId) {
+          setCurrentSessionId(payload.sessionId);
+          currentSessionIdRef.current = payload.sessionId;
+        }
       } else if (payload.type === "MEMBERS_UPDATE") {
         if (payload.members) setMembers(payload.members);
         if (payload.sessions) setSessions(payload.sessions);
       } else if (payload.type === "SYNC_ORDER") {
-        // Suivi automatique si l'on est au menu du salon
+        const s = payload.data || payload;
+        const orderSessionId = payload.sessionId;
+
+        // Si l'on est au menu du salon (GROUP)
         if (stateRef.current !== "WATCH") {
-          const s = payload.data || payload;
-          if (s.activeUrl || s.activePluginId) {
+          // On ne bascule en WATCH QUE si l'ordre concerne explicitement notre session
+          // (ex: suite à un clic sur "Rejoindre" ou un BROADCAST)
+          const isMySession =
+            orderSessionId &&
+            (orderSessionId === currentSessionIdRef.current || payload.isBroadcast);
+
+          if (isMySession && s.activeUrl) {
             setRoomState(s);
-            if (payload.sessionId) setCurrentSessionId(payload.sessionId);
             const plugin = s.activePluginId || "youtube";
             setActivePluginId(plugin);
-            if (s.activeUrl) {
-              setActiveUrl(s.activeUrl);
-              invoke("set_view_mode", { mode: "WATCH", url: s.activeUrl });
-            }
+            setActiveUrl(s.activeUrl);
+            invoke("playback_control", {
+              command: "APPLY_STATE",
+              data: s,
+            });
+            invoke("set_view_mode", { mode: "WATCH", url: s.activeUrl });
             setState("WATCH");
           }
         }
@@ -125,7 +126,8 @@ function App() {
   const handleStopWatching = () => {
     setState("GROUP");
     setActiveUrl(null);
-    invoke("set_view_mode", { mode: "GROUP" });
+    invoke("set_view_mode", { mode: "HOME" });
+    socket.emit("LEAVE_SESSION");
   };
 
   const handleLeave = () => {
@@ -140,7 +142,7 @@ function App() {
   };
 
   const handleAutoNavigate = (targetUrl: string | null) => {
-    if (!targetUrl || isSameMedia(targetUrl, activeUrl)) return;
+    if (!targetUrl) return;
 
     console.log("[SyncWatch] 🧭 Auto-navigating to:", targetUrl);
     setActiveUrl(targetUrl);
@@ -151,6 +153,7 @@ function App() {
   const handleJoinSession = (sessionId: string) => {
     console.log("[SyncWatch] 🎯 Joining session:", sessionId);
     setCurrentSessionId(sessionId);
+    currentSessionIdRef.current = sessionId;
     socket.emit("JOIN_SESSION", { sessionId });
   };
 
@@ -173,7 +176,9 @@ function App() {
           roomId={roomId}
           isHost={isHost}
           members={members}
+          currentSessionId={currentSessionId}
           onSelectSource={handleSelectSource}
+          onJoinSession={handleJoinSession}
         />
       )}
 

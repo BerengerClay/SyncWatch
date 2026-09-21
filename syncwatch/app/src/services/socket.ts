@@ -14,7 +14,7 @@ export const listenToServer = (callback: (data: any) => void) => {
     const events = [
         'ROOM_CREATED', 'JOIN_SUCCESS', 'CHAT_MSG', 'USER_JOINED', 'USER_LEFT',
         'SYNC_STATE', 'SYNC_ORDER', 'SET_ACTIVE_PLUGIN',
-        'MEMBERS_UPDATE'
+        'MEMBERS_UPDATE', 'SESSION_CHANGED'
     ];
 
     // On stocke les wrappers pour pouvoir les retirer précisément

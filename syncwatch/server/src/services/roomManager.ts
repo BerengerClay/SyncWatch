@@ -57,7 +57,7 @@ export const createRoom = (
         name: userName || "Host",
         sessionId: hostSessionId,
         activeUrl: null,
-        title: "En attente",
+        features: {},
         paused: true,
         time: 0,
       },
@@ -73,7 +73,7 @@ export const createRoom = (
 };
 
 /**
- * 2. Rejoint un salon existant (rejoint par défaut la session principale)
+ * 2. Rejoint un salon existant (rejoint toujours le lobby avec sa propre session vierge)
  */
 export const joinRoom = (
   roomId: string,
@@ -83,34 +83,60 @@ export const joinRoom = (
   const room = rooms.get(roomId);
   if (!room) return null;
 
-  let targetSessionId = room.defaultSessionId;
-  if (!targetSessionId || !room.sessions[targetSessionId]) {
-    targetSessionId = generateSessionId(socketId);
-    room.sessions[targetSessionId] = {
-      id: targetSessionId,
-      activeUrl: null,
-      activePluginId: null,
-      media: null,
-      features: {},
-      rules: {},
-      lastUpdate: Date.now(),
-    };
-    room.defaultSessionId = targetSessionId;
-  }
-
-  const targetSession = room.sessions[targetSessionId];
+  // Chaque membre commence dans sa propre session vierge dans le lobby
+  const userSessionId = generateSessionId(socketId);
+  room.sessions[userSessionId] = {
+    id: userSessionId,
+    activeUrl: null,
+    activePluginId: null,
+    media: null,
+    features: {},
+    rules: {},
+    lastUpdate: Date.now(),
+  };
 
   room.members.push({
     id: socketId,
     name: userName || "Invité",
-    sessionId: targetSessionId,
-    activeUrl: targetSession.activeUrl,
-    title: targetSession.features?.ytTitle || "En attente",
-    paused: targetSession.media?.paused ?? true,
-    time: targetSession.media?.time ?? 0,
+    sessionId: userSessionId,
+    activeUrl: null,
+    features: {},
+    paused: true,
+    time: 0,
   });
 
-  return { room, targetSessionId };
+  return { room, targetSessionId: userSessionId };
+};
+
+/**
+ * Quitte une session de visionnage pour retourner dans le lobby
+ */
+export const leaveSessionToLobby = (
+  room: Room,
+  socketId: string
+): { member: MemberPresence; newSessionId: string } | null => {
+  const member = room.members.find((m) => m.id === socketId);
+  if (!member) return null;
+
+  const newSessionId = generateSessionId(socketId);
+  member.sessionId = newSessionId;
+  member.activeUrl = null;
+  member.features = {};
+  member.paused = true;
+  member.time = 0;
+
+  room.sessions[newSessionId] = {
+    id: newSessionId,
+    activeUrl: null,
+    activePluginId: null,
+    media: null,
+    features: {},
+    rules: {},
+    lastUpdate: Date.now(),
+  };
+
+  cleanupOrphanSessions(room);
+  return { member, newSessionId };
 };
 
 /**
@@ -127,7 +153,7 @@ export const joinSession = (
 
   member.sessionId = targetSessionId;
   member.activeUrl = targetSession.activeUrl;
-  member.title = targetSession.features?.ytTitle;
+  member.features = { ...targetSession.features };
 
   return { member, session: targetSession };
 };
@@ -153,7 +179,7 @@ export const broadcastSessionToRoom = (
   otherMembers.forEach((m) => {
     m.sessionId = targetSessionId;
     m.activeUrl = targetSession.activeUrl;
-    m.title = targetSession.features?.ytTitle;
+    m.features = { ...targetSession.features };
   });
 
   return { targetSession, otherMembers };
@@ -192,6 +218,7 @@ export const handleVideoNavigation = (
   const newSessionId = generateSessionId(member.id);
   member.sessionId = newSessionId;
   member.activeUrl = activeUrl;
+  if (features) member.features = { ...features };
 
   const newSession: WatchSession = {
     id: newSessionId,
