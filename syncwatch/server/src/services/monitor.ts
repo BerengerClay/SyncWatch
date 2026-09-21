@@ -11,7 +11,7 @@ export interface SocketLogEntry {
   data: any;
 }
 
-export interface MediaChangeEvent {
+export interface StateChangeEvent {
   id: string;
   timestamp: number;
   memberId: string;
@@ -20,9 +20,7 @@ export interface MediaChangeEvent {
   sessionId: string;
   previousUrl?: string | null;
   newUrl: string | null;
-  features?: Record<string, any>;
-  time?: number;
-  paused?: boolean;
+  state?: Record<string, any>;
 }
 
 export interface ServerStats {
@@ -43,11 +41,11 @@ class MonitorService {
   private io: Server | null = null;
   private adminNamespace: Namespace | null = null;
   private logs: SocketLogEntry[] = [];
-  private mediaChanges: MediaChangeEvent[] = [];
+  private stateChanges: StateChangeEvent[] = [];
   private totalMessagesCount = 0;
   private startTime = Date.now();
   private maxLogs = 300;
-  private maxMediaChanges = 50;
+  private maxStateChanges = 50;
 
   public init(io: Server) {
     this.io = io;
@@ -73,21 +71,21 @@ class MonitorService {
     }
   }
 
-  public recordMediaChange(change: Omit<MediaChangeEvent, "id" | "timestamp">) {
-    const fullChange: MediaChangeEvent = {
+  public recordStateChange(change: Omit<StateChangeEvent, "id" | "timestamp">) {
+    const fullChange: StateChangeEvent = {
       id: Math.random().toString(36).substring(2, 9),
       timestamp: Date.now(),
       ...change,
     };
 
-    this.mediaChanges.unshift(fullChange);
-    if (this.mediaChanges.length > this.maxMediaChanges) {
-      this.mediaChanges.pop();
+    this.stateChanges.unshift(fullChange);
+    if (this.stateChanges.length > this.maxStateChanges) {
+      this.stateChanges.pop();
     }
 
     // Émission STRICTEMENT réservée aux dashboards connectés sur /admin
     if (this.adminNamespace) {
-      this.adminNamespace.emit("ADMIN_MEDIA_CHANGED", fullChange);
+      this.adminNamespace.emit("ADMIN_STATE_CHANGED", fullChange);
     }
   }
 
@@ -121,7 +119,7 @@ class MonitorService {
       stats: this.getStats(rooms),
       rooms,
       recentLogs: this.logs.slice(0, 50),
-      recentMediaChanges: this.mediaChanges.slice(0, 20),
+      recentStateChanges: this.stateChanges.slice(0, 20),
     };
   }
 

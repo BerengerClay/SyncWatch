@@ -223,8 +223,7 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
         member,
         packet.data.activeUrl,
         packet.data.activePluginId,
-        packet.data.media,
-        packet.data.features,
+        packet.data.state,
         packet.data.rules
       );
 
@@ -233,16 +232,14 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
         socket.emit("SESSION_CHANGED", { sessionId: navResult.newSessionId });
         console.log(`[SESSION] 🔀 ${member.name} a créé la session ${navResult.newSessionId}`);
 
-        monitor.recordMediaChange({
+        monitor.recordStateChange({
           memberId: member.id,
           userName: member.name,
           roomId: room.id,
           sessionId: navResult.newSessionId,
           previousUrl: prevUrl,
           newUrl: packet.data.activeUrl,
-          features: packet.data.features || member.features,
-          time: packet.data.media?.time ?? member.time,
-          paused: packet.data.media?.paused ?? member.paused,
+          state: packet.data.state || member.state,
         });
       }
     }
@@ -254,7 +251,7 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
     // Application du moteur de réactions (pubs collectives, etc.)
     const enhancedData = processReactions(
       packet.data,
-      session.rules,
+      session.rules || {},
       room,
       sessionId,
       socket.id
@@ -262,19 +259,8 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
 
     // Mise à jour de la présence du membre
     if (packet.data.activeUrl !== undefined) member.activeUrl = packet.data.activeUrl;
-    if (packet.data.features) {
-      member.features = { ...(member.features || {}), ...packet.data.features };
-    }
-    if (packet.data.media?.time !== undefined) member.time = packet.data.media.time;
-    if (packet.data.media?.paused !== undefined) member.paused = packet.data.media.paused;
-
-    // 🛡️ Arbitrage collectif : la session reste en pause tant qu'au moins un membre a une pub
-    const isAnyoneInSessionInAd = room.members.some(
-      (m) => m.sessionId === sessionId && m.features?.isAd === true
-    );
-
-    if (isAnyoneInSessionInAd && enhancedData.media?.paused === false) {
-      enhancedData.media.paused = true;
+    if (packet.data.state) {
+      member.state = { ...(member.state || {}), ...packet.data.state };
     }
 
     // Mise à jour de l'état de la session

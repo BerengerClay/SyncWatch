@@ -34,7 +34,7 @@ class CanalPlusPlugin extends BaseSyncPlugin {
                 WebkitBoxOrient: 'vertical',
                 overflow: 'hidden'
             }
-        }, features?.title || 'Programme Canal+')
+        }, state?.title || 'Programme Canal+')
       ])
     `;
   }

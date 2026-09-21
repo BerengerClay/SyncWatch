@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { MediaState, FeaturesState, MemberInfo } from '../types/sync';
+import { MemberInfo } from '../types/sync';
 
 interface UseWatchSessionProps {
   activeUrl: string | null;
@@ -8,8 +8,7 @@ interface UseWatchSessionProps {
 }
 
 export function useWatchSession({ activeUrl, onJoinSession }: UseWatchSessionProps) {
-  const [mediaState, setMediaState] = useState<MediaState | null>(null);
-  const [featuresState, setFeaturesState] = useState<FeaturesState | null>(null);
+  const [pluginState, setPluginState] = useState<Record<string, any> | null>(null);
   const [currentLocalUrl, setCurrentLocalUrl] = useState<string | null>(activeUrl);
   const [selectedMember, setSelectedMember] = useState<MemberInfo | null>(null);
 
@@ -17,24 +16,19 @@ export function useWatchSession({ activeUrl, onJoinSession }: UseWatchSessionPro
   const lastCode = useRef<string | null>(null);
 
   const handleUpdate = useCallback((payload: any) => {
-    const { media, features, sidebarCode, activeUrl: reportedUrl } = payload;
+    const { state, sidebarCode, activeUrl: reportedUrl } = payload;
 
     if (reportedUrl) {
       setCurrentLocalUrl(reportedUrl);
     }
 
-    if (media === null) {
-      setMediaState(null);
-      setFeaturesState(null);
-    } else if (media) {
-      setMediaState((prev) => {
-        if (!prev) return media;
-        return { ...prev, ...media };
+    if (state === null) {
+      setPluginState(null);
+    } else if (state) {
+      setPluginState((prev) => {
+        if (!prev) return state;
+        return { ...prev, ...state };
       });
-    }
-
-    if (media !== null && features && Object.keys(features).length > 0) {
-      setFeaturesState((prev) => ({ ...prev, ...features }));
     }
 
     if (sidebarCode && sidebarCode !== lastCode.current) {
@@ -51,8 +45,8 @@ export function useWatchSession({ activeUrl, onJoinSession }: UseWatchSessionPro
   const handleControl = useCallback((command: string, data: any) => {
     invoke('playback_control', { command, data }).catch(console.error);
 
-    if (command === 'APPLY_STATE' && data.media) {
-      setMediaState((prev) => ({ ...prev, ...data.media }));
+    if (command === 'APPLY_STATE' && data.state) {
+      setPluginState((prev) => ({ ...(prev || {}), ...data.state }));
     }
   }, []);
 
@@ -68,8 +62,7 @@ export function useWatchSession({ activeUrl, onJoinSession }: UseWatchSessionPro
   }, [onJoinSession]);
 
   return {
-    mediaState,
-    featuresState,
+    pluginState,
     currentLocalUrl,
     selectedMember,
     setSelectedMember,

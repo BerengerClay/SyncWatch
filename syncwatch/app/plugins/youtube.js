@@ -24,7 +24,7 @@ class YouTubePlugin extends BaseSyncPlugin {
   getSyncRules() {
     return {
       ...super.getSyncRules(),
-      "features.title": { type: "IGNORED" },
+      "title": { type: "IGNORED" },
     };
   }
 
@@ -112,7 +112,7 @@ class YouTubePlugin extends BaseSyncPlugin {
             key: 'yt-title',
             className: 'text-center font-bold text-white tracking-tight leading-tight',
             style: { fontSize: 'clamp(1.5rem, 6vw, 1.8rem)', display: '-webkit-box', WebkitLineClamp: '3', WebkitBoxOrient: 'vertical', overflow: 'hidden' }
-        }, features?.title || 'Chargement...'),
+        }, state?.title || 'Chargement...'),
     ])`;
   }
 }

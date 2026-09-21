@@ -7,8 +7,7 @@ class BaseSyncPlugin extends SyncWatchCore {
     this.name = "Base Plugin";
     this.uiSent = false;
     this.videoElement = null;
-    this.aggregatedMedia = null;
-    this.aggregatedFeatures = {};
+    this.aggregatedState = {};
     this.syncTimeout = null;
   }
 
@@ -38,25 +37,25 @@ class BaseSyncPlugin extends SyncWatchCore {
   // --- 📏 RÈGLES DE SYNCHRO (Vraiment Agnostique V2) ---
   getSyncRules() {
     return {
-      "media.paused": { type: "DISCRETE" },
-      "media.playbackRate": { type: "DISCRETE" },
-      "media.time": {
+      "paused": { type: "DISCRETE" },
+      "playbackRate": { type: "DISCRETE" },
+      "time": {
         type: "CONTINUOUS",
         driftThreshold: 2.0,
-        speedKey: "media.playbackRate",
-        activeIfKey: "media.paused",
+        speedKey: "playbackRate",
+        activeIfKey: "paused",
         activeInverted: true,
-        blockingIfKey: "media.seeking",
+        blockingIfKey: "seeking",
       },
-      "media.seeking": { type: "IGNORED" },
-      "media.duration": { type: "IGNORED" },
+      "seeking": { type: "IGNORED" },
+      "duration": { type: "IGNORED" },
       "activeUrl": { type: "IGNORED" },
-      "features.isAd": {
+      "isAd": {
         type: "DISCRETE",
         collective: true,
         reactions: {
-          true: { "media.paused": true },
-          false: { "media.paused": false },
+          true: { "paused": true },
+          false: { "paused": false },
         },
       },
     };
@@ -83,7 +82,7 @@ class BaseSyncPlugin extends SyncWatchCore {
           window.top.postMessage(
             {
               type: "SW_INFO",
-              media: this.getBaseState(),
+              state: this.getBaseState(),
             },
             "*",
           );
@@ -153,17 +152,15 @@ class BaseSyncPlugin extends SyncWatchCore {
         this.syncTimeout = null;
 
         const currentState = {
-          media: this.getBaseState() || this.aggregatedMedia,
-          features: {
-            ...(this.aggregatedFeatures || {}),
+          state: {
+            ...(this.aggregatedState || {}),
+            ...(this.getBaseState() || {}),
             ...this.scrapeTopData(),
             ...this.getCustomState(),
           },
           activeUrl: this.getCurrentUrl(),
           rules: this.getSyncRules(),
         };
-
-        if (!currentState.media) currentState.features = null;
 
         document.querySelectorAll("iframe").forEach((f) => {
           f.contentWindow?.postMessage({ type: "SW_FORCE_UPDATE" }, "*");
@@ -183,31 +180,28 @@ class BaseSyncPlugin extends SyncWatchCore {
 
     window.addEventListener("message", (e) => {
       if (!e.data) return;
-      if (e.data.type === "SW_INFO") {
-        if (e.data.media) this.aggregatedMedia = e.data.media;
-        if (e.data.features)
-          this.aggregatedFeatures = {
-            ...this.aggregatedFeatures,
-            ...e.data.features,
-          };
+      if (e.data.type === "SW_INFO" && e.data.state) {
+        this.aggregatedState = {
+          ...this.aggregatedState,
+          ...e.data.state,
+        };
       }
       if (e.data.type === "SW_TRIGGER_SYNC") forceSync();
     });
 
     this.listenToApp((cmd, data) => {
-      if (cmd === "APPLY_STATE" && data.media !== undefined) {
+      if (cmd === "APPLY_STATE" && data.state) {
         // 🛡️ DOUBLE SÉCURITÉ : Le plugin refuse de bouger s'il sait qu'il y a une pub
-        if (this.isWatchingAd()) {
+        if (this.getCustomState().isAd) {
           console.log("[%s] 🛡️ Plugin Sanctuary: Ignoring sync order during ad.", this.name);
           return;
         }
 
-        if (data.media)
-          this.aggregatedMedia = {
-            ...(this.aggregatedMedia || {}),
-            ...data.media,
-          };
-        this.applyBaseState(data.media);
+        this.aggregatedState = {
+          ...(this.aggregatedState || {}),
+          ...data.state,
+        };
+        this.applyBaseState(data.state);
 
         document.querySelectorAll("iframe").forEach((f) => {
           f.contentWindow?.postMessage(
@@ -222,8 +216,7 @@ class BaseSyncPlugin extends SyncWatchCore {
 
     window.addEventListener("pagehide", () => {
       this.sendReportToApp({
-        media: null,
-        features: { title: "Déconnexion..." },
+        fullState: { state: { title: "Déconnexion..." } },
         sidebarCode: null,
       }).catch(() => {});
     });
@@ -237,18 +230,20 @@ class BaseSyncPlugin extends SyncWatchCore {
       window.top.postMessage(
         {
           type: "SW_INFO",
-          media: this.getBaseState(),
-          features: this.getCustomState(),
+          state: {
+            ...(this.getBaseState() || {}),
+            ...this.getCustomState(),
+          }
         },
-        "*",
+        "*"
       );
     };
 
     window.addEventListener("message", (e) => {
       if (!e.data) return;
       if (e.data.type === "SW_FORCE_UPDATE") sendToTop();
-      if (e.data.type === "SW_APPLY_STATE" && e.data.payload.media) {
-        this.applyBaseState(e.data.payload.media);
+      if (e.data.type === "SW_APPLY_STATE" && e.data.payload.state) {
+        this.applyBaseState(e.data.payload.state);
       }
     });
 
@@ -281,7 +276,7 @@ class BaseSyncPlugin extends SyncWatchCore {
         key: 'play-pause-btn',
         onClick: () => {
             props.sendControl('APPLY_STATE', { 
-                media: { paused: !isPaused },
+                state: { paused: !isPaused },
                 isLocal: true
             });
         },
@@ -321,7 +316,7 @@ class BaseSyncPlugin extends SyncWatchCore {
             onChange: (e) => {
                 const val = parseFloat(e.target.value);
                 props.sendControl('APPLY_STATE', { 
-                    media: { time: val },
+                    state: { time: val },
                     isLocal: true
                 });
                 setTimeout(() => setIsDragging(false), 600);
@@ -335,35 +330,34 @@ class BaseSyncPlugin extends SyncWatchCore {
     const pluginName = this.name;
     const classes = this.getContainerClasses();
     return `(props) => {
-      const media = props.media;
-      const features = props.features;
+      const state = props.state || {};
       
-      const isIdle = !media;
-      const isAd = !!features?.isAd;
-      const isWatch = !!media && !isAd;
+      const isIdle = Object.keys(state).length === 0;
+      const isAd = !!state.isAd;
+      const isWatch = !isIdle && !isAd;
 
-      const time = media?.time || 0;
-      const duration = media?.duration || 0;
-      const isPaused = media ? media.paused : true;
+      const time = state.time || 0;
+      const duration = state.duration || 0;
+      const isPaused = state.paused !== undefined ? state.paused : true;
 
       const [isDragging, setIsDragging] = React.useState(false);
       const [localTime, setLocalTime] = React.useState(time);
 
       React.useEffect(() => {
-        if (!media) return;
+        if (isIdle) return;
         if (!isDragging) {
             setLocalTime(prev => Math.abs(prev - time) > 0.5 ? time : prev);
         }
-      }, [time, isDragging, media]);
+      }, [time, isDragging, state]);
 
       React.useEffect(() => {
-        if (!media) return;
+        if (isIdle) return;
         let interval;
         if (!isPaused && !isDragging) {
             interval = setInterval(() => setLocalTime(prev => prev + 0.1), 100);
         }
         return () => clearInterval(interval);
-      }, [isPaused, isDragging, media]);
+      }, [isPaused, isDragging, state]);
 
       const formatTime = (s) => {
         if (!s || isNaN(s)) return "00:00";

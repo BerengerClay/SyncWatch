@@ -113,7 +113,7 @@ export const GroupDashboard: React.FC<Props> = ({
                           </span>
                         </div>
                         <span className="text-xs text-slate-400 truncate max-w-[340px] mt-0.5">
-                          {m.features?.title || m.features?.name || 'Vidéo en cours'}
+                          {m.state?.title || m.state?.name || 'Vidéo en cours'}
                         </span>
                       </div>
                     </div>

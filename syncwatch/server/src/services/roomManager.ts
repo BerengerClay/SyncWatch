@@ -41,8 +41,7 @@ export const createRoom = (
     id: hostSessionId,
     activeUrl: null,
     activePluginId: null,
-    media: null,
-    features: {},
+    state: {},
     rules: {},
     lastUpdate: Date.now(),
   };
@@ -57,9 +56,7 @@ export const createRoom = (
         name: userName || "Host",
         sessionId: hostSessionId,
         activeUrl: null,
-        features: {},
-        paused: true,
-        time: 0,
+        state: {},
       },
     ],
     sessions: {
@@ -89,8 +86,7 @@ export const joinRoom = (
     id: userSessionId,
     activeUrl: null,
     activePluginId: null,
-    media: null,
-    features: {},
+    state: {},
     rules: {},
     lastUpdate: Date.now(),
   };
@@ -100,9 +96,7 @@ export const joinRoom = (
     name: userName || "Invité",
     sessionId: userSessionId,
     activeUrl: null,
-    features: {},
-    paused: true,
-    time: 0,
+    state: {},
   });
 
   return { room, targetSessionId: userSessionId };
@@ -121,16 +115,13 @@ export const leaveSessionToLobby = (
   const newSessionId = generateSessionId(socketId);
   member.sessionId = newSessionId;
   member.activeUrl = null;
-  member.features = {};
-  member.paused = true;
-  member.time = 0;
+  member.state = {};
 
   room.sessions[newSessionId] = {
     id: newSessionId,
     activeUrl: null,
     activePluginId: null,
-    media: null,
-    features: {},
+    state: {},
     rules: {},
     lastUpdate: Date.now(),
   };
@@ -153,7 +144,7 @@ export const joinSession = (
 
   member.sessionId = targetSessionId;
   member.activeUrl = targetSession.activeUrl;
-  member.features = { ...targetSession.features };
+  member.state = { ...targetSession.state };
 
   return { member, session: targetSession };
 };
@@ -179,7 +170,7 @@ export const broadcastSessionToRoom = (
   otherMembers.forEach((m) => {
     m.sessionId = targetSessionId;
     m.activeUrl = targetSession.activeUrl;
-    m.features = { ...targetSession.features };
+    m.state = { ...targetSession.state };
   });
 
   return { targetSession, otherMembers };
@@ -193,8 +184,7 @@ export const handleVideoNavigation = (
   member: MemberPresence,
   activeUrl: string,
   activePluginId?: string,
-  media?: any,
-  features?: any,
+  state?: Record<string, any>,
   rules?: Record<string, SyncRule>
 ): { newSessionId: string; oldSessionId: string; isNewSession: boolean } => {
   const currentSession = room.sessions[member.sessionId];
@@ -218,14 +208,13 @@ export const handleVideoNavigation = (
   const newSessionId = generateSessionId(member.id);
   member.sessionId = newSessionId;
   member.activeUrl = activeUrl;
-  if (features) member.features = { ...features };
+  if (state) member.state = { ...state };
 
   const newSession: WatchSession = {
     id: newSessionId,
     activeUrl,
     activePluginId: activePluginId || "youtube",
-    media: media || { time: 0, paused: false },
-    features: features || {},
+    state: state || {},
     rules: rules || currentSession?.rules || {},
     lastUpdate: Date.now(),
   };
@@ -258,8 +247,7 @@ export const updateSessionState = (
       id: sessionId,
       activeUrl: null,
       activePluginId: null,
-      media: null,
-      features: {},
+      state: {},
       rules: patch.rules || {},
       lastUpdate: Date.now(),
     };

@@ -11,7 +11,7 @@ import {
   Users,
 } from "lucide-react";
 import { useWatchSession } from "../hooks/useWatchSession";
-import { MemberInfo, WatchSessionState, FeaturesState } from "../types/sync";
+import { MemberInfo, WatchSessionState } from "../types/sync";
 
 // Indispensable pour que les plugins puissent utiliser React.createElement
 (window as any).React = React;
@@ -51,8 +51,7 @@ export const WatchScreen: React.FC<Props> = ({
   initialRoomState,
 }) => {
   const {
-    mediaState,
-    featuresState,
+    pluginState,
     currentLocalUrl,
     selectedMember,
     setSelectedMember,
@@ -71,9 +70,9 @@ export const WatchScreen: React.FC<Props> = ({
     }
   };
 
-  const getFeatureLabel = (features: FeaturesState | undefined | null) => {
-    if (!features) return null;
-    return features.title || features.name || null;
+  const getStateLabel = (state: Record<string, any> | undefined | null) => {
+    if (!state) return null;
+    return state.title || state.name || state.tf1Title || null;
   };
 
   const syncedMembers = members.filter((m) => m.sessionId === currentSessionId);
@@ -147,7 +146,7 @@ export const WatchScreen: React.FC<Props> = ({
                   <button
                     key={m.id}
                     onClick={() => setSelectedMember(m)}
-                    title={`${m.name} : ${getFeatureLabel(m.features) || "En navigation"} ${isWithMe ? "(Avec vous)" : "(Cliquer pour voir)"}`}
+                    title={`${m.name} : ${getStateLabel(m.state) || "En navigation"} ${isWithMe ? "(Avec vous)" : "(Cliquer pour voir)"}`}
                     className={`w-5 h-5 rounded-full border border-[#020617] flex items-center justify-center text-[8px] font-black uppercase overflow-hidden transition-all duration-300 hover:scale-125 cursor-pointer ${
                       isWithMe ?
                         "ring-1 ring-emerald-400/80 shadow-[0_0_8px_rgba(52,211,153,0.3)]"
@@ -202,13 +201,13 @@ export const WatchScreen: React.FC<Props> = ({
                 key={m.id}
                 onClick={() => handleJoinFriend(m)}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 hover:bg-emerald-500/20 text-slate-300 hover:text-emerald-300 border border-white/10 hover:border-emerald-500/30 text-[9px] font-medium transition-all shrink-0 active:scale-95 cursor-pointer"
-                title={`Rejoindre ${m.name} (${getFeatureLabel(m.features) || "Vidéo"})`}
+                title={`Rejoindre ${m.name} (${getStateLabel(m.state) || "Vidéo"})`}
               >
                 <UserPlus size={10} className="text-emerald-400" />
                 <span className="truncate max-w-[130px]">
                   Rejoindre {m.name}{" "}
-                  {getFeatureLabel(m.features) ?
-                    `· ${getFeatureLabel(m.features)}`
+                  {getStateLabel(m.state) ?
+                    `· ${getStateLabel(m.state)}`
                   : ""}
                 </span>
               </button>
@@ -222,7 +221,7 @@ export const WatchScreen: React.FC<Props> = ({
         <div className="flex items-center gap-2 min-w-0 overflow-hidden">
           <Tv size={13} className="text-indigo-400 shrink-0" />
           <span className="text-[10px] font-semibold text-slate-400 truncate">
-            {getFeatureLabel(featuresState) ||
+            {getStateLabel(pluginState) ||
               getDisplayDomain(currentLocalUrl || activeUrl) ||
               "En direct"}
           </span>
@@ -234,8 +233,7 @@ export const WatchScreen: React.FC<Props> = ({
         {PluginUI ?
           <div className="w-full h-full flex flex-col">
             <PluginUI
-              media={mediaState}
-              features={featuresState}
+              state={pluginState}
               sendControl={handleControl}
             />
           </div>
@@ -281,7 +279,7 @@ export const WatchScreen: React.FC<Props> = ({
                 Actuellement :
               </div>
               <div className="p-2 bg-white/5 rounded-lg text-slate-200 truncate font-medium text-[11px]">
-                {getFeatureLabel(selectedMember.features) ||
+                {getStateLabel(selectedMember.state) ||
                   selectedMember.activeUrl ||
                   "En navigation libre"}
               </div>

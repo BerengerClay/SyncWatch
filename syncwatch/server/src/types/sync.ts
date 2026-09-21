@@ -20,26 +20,16 @@ export interface MemberPresence {
   name: string;
   sessionId: string;
   activeUrl?: string | null;
-  features?: Record<string, any>;
-  time?: number;
-  paused?: boolean;
+  state?: Record<string, any>;
 }
 
 export interface WatchSession {
   id: string;
   activeUrl: string | null;
   activePluginId: string | null;
-  media: {
-    time?: number;
-    paused?: boolean;
-    duration?: number;
-    playbackRate?: number;
-    seeking?: boolean;
-    [key: string]: any;
-  } | null;
-  features: Record<string, any>;
-  rules: Record<string, SyncRule>;
+  state: Record<string, any>;
   lastUpdate: number;
+  rules?: Record<string, SyncRule>;
 }
 
 export interface Room {
@@ -56,8 +46,7 @@ export interface SendActionPacket {
   data: {
     activeUrl?: string;
     activePluginId?: string;
-    media?: any;
-    features?: any;
+    state?: Record<string, any>;
     rules?: Record<string, SyncRule>;
     [key: string]: any;
   };
