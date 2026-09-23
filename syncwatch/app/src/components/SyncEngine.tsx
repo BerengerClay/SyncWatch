@@ -67,7 +67,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
     initialRoomState?.state !== undefined ?
       {
         ...initialRoomState.state,
-        ts: initialRoomState.lastUpdate || Date.now(),
+        ts: initialRoomState.lastUpdate ? initialRoomState.lastUpdate - clockOffset : Date.now(),
       }
     : null,
   );

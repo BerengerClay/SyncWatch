@@ -44,14 +44,23 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
     });
   });
 
+  const getExtrapolatedSessions = (room: Room) => {
+    const extrapolated: Record<string, any> = {};
+    for (const [id, session] of Object.entries(room.sessions)) {
+      extrapolated[id] = extrapolateSession(session).state;
+    }
+    return extrapolated;
+  };
+
   /**
    * Diffuse les changements de présence et de structure du salon
    * (Arrivée, Départ, Changement de session)
    */
   const broadcastMembers = (room: Room) => {
+    const sessions = getExtrapolatedSessions(room);
     io.to(room.id).emit("MEMBERS_UPDATE", {
       members: room.members,
-      sessions: room.sessions,
+      sessions,
     });
     monitor.logMessage({
       socketId: "server",
@@ -78,7 +87,7 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
       hostId: socket.id,
       sessionId: hostSessionId,
       members: room.members,
-      sessions: room.sessions,
+      sessions: getExtrapolatedSessions(room),
     });
 
     broadcastMembers(room);
@@ -103,7 +112,7 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
         ts: Date.now(),
         initialState: null,
         members: room.members,
-        sessions: room.sessions,
+        sessions: getExtrapolatedSessions(room),
       });
 
       broadcastMembers(room);

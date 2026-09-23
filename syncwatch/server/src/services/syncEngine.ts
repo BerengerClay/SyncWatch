@@ -96,6 +96,8 @@ export const extrapolateSession = (
     }
   });
 
+  extrapolatedState.lastUpdate = now;
+
   return { state: extrapolatedState, ts: now };
 };
 
