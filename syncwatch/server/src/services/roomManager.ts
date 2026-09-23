@@ -1,5 +1,5 @@
 import { Room, WatchSession, MemberPresence, SyncRule } from "../types/sync.js";
-import { deepMerge, isSameMedia } from "./syncEngine.js";
+import { deepMerge, isSameMedia, extrapolateSession } from "./syncEngine.js";
 
 /**
  * Gestionnaire d'état en mémoire des Salles (Rooms) et des Sessions (WatchSessions).
@@ -252,6 +252,10 @@ export const updateSessionState = (
       lastUpdate: Date.now(),
     };
     room.sessions[sessionId] = session;
+  } else {
+    // ⚡ Extrapole l'état actuel de la session jusqu'à MAINTENANT
+    // avant d'appliquer la nouvelle modification.
+    session = extrapolateSession(session).state;
   }
 
   room.sessions[sessionId] = deepMerge(session, patch);

@@ -49,11 +49,12 @@ class BaseSyncPlugin extends SyncWatchCore {
       },
       "seeking": { type: "IGNORED" },
       "duration": { type: "IGNORED" },
+      "readyState": { type: "IGNORED" },
       "activeUrl": { type: "IGNORED" },
       "isAd": {
         type: "DISCRETE",
         collective: true,
-        readOnly: true,
+        controllable: false,
         reactions: {
           true: { "paused": true },
           false: { "paused": false },
@@ -113,8 +114,9 @@ class BaseSyncPlugin extends SyncWatchCore {
     if (!v) return null;
     return {
       time: v.currentTime,
-      paused: v.paused,
+      paused: v.paused || v.readyState < 3,
       seeking: v.seeking, // 🟢 NOTRE VIGILE
+      readyState: v.readyState || 0, // 📡 VIGILE DE CHARGEMENT
       duration: v.duration || 0,
       playbackRate: v.playbackRate || 1.0,
     };

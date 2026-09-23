@@ -12,7 +12,7 @@ export interface SyncRule {
   activeInverted?: boolean;
   blockingIfKey?: string;
   collective?: boolean;
-  readOnly?: boolean;
+  controllable?: boolean;
   reactions?: Record<string, Record<string, any>>;
 }
 

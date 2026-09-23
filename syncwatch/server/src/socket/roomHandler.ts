@@ -241,6 +241,27 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
           newUrl: packet.data.activeUrl,
           state: packet.data.state || member.state,
         });
+      } else if (packet.data.activeUrl && navResult.newSessionId !== navResult.oldSessionId) {
+        // The user navigated naturally to an EXISTING session!
+        // We must NOT overwrite the existing session's state with their dummy payload!
+        // Instead, we pull the existing session's state and send it to them.
+        hasStructuralChange = true;
+        socket.emit("SESSION_CHANGED", { sessionId: navResult.newSessionId });
+        
+        const existingSession = room.sessions[navResult.newSessionId];
+        const { state, ts } = extrapolateSession(existingSession);
+        
+        socket.emit("SYNC_ORDER", {
+          sessionId: navResult.newSessionId,
+          ts,
+          data: {
+            ...state,
+            activeUrl: existingSession.activeUrl,
+          },
+        });
+        
+        broadcastMembers(room);
+        return; // Fin du traitement: on n'applique pas leur action!
       }
     }
 
@@ -262,6 +283,8 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
     if (packet.data.state) {
       member.state = { ...(member.state || {}), ...packet.data.state };
     }
+
+
 
     // Mise à jour de l'état de la session
     updateSessionState(room, sessionId, enhancedData);
