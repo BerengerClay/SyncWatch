@@ -13,6 +13,8 @@ export interface SyncRule {
   blockingIfKey?: string;
   collective?: boolean;
   controllable?: boolean;
+  ignoreIfKey?: string;
+  hijacksPlayer?: boolean;
   reactions?: Record<string, Record<string, any>>;
 }
 

@@ -82,6 +82,7 @@ export const extrapolateSession = (
   Object.keys(rules).forEach((path) => {
     const rule = rules[path];
     if (rule.type === "CONTINUOUS") {
+      if (rule.ignoreIfKey && getValue(session.state, rule.ignoreIfKey)) return;
       const speed = rule.speedKey ? getValue(session.state, rule.speedKey) || 1 : 1;
       const active = rule.activeIfKey ? getValue(session.state, rule.activeIfKey) : true;
       const isRunning = rule.activeInverted ? !active : active;

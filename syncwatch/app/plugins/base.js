@@ -46,6 +46,7 @@ class BaseSyncPlugin extends SyncWatchCore {
         activeIfKey: "paused",
         activeInverted: true,
         blockingIfKey: "seeking",
+        ignoreIfKey: "isAd",
       },
       "seeking": { type: "IGNORED" },
       "duration": { type: "IGNORED" },
@@ -55,6 +56,7 @@ class BaseSyncPlugin extends SyncWatchCore {
         type: "DISCRETE",
         collective: true,
         controllable: false,
+        hijacksPlayer: true,
         reactions: {
           true: { "paused": true },
           false: { "paused": false },

@@ -16,6 +16,8 @@ export interface SyncRule {
   blockingIfKey?: string;
   collective?: boolean;
   controllable?: boolean;
+  ignoreIfKey?: string;
+  hijacksPlayer?: boolean;
   reactions?: Record<string, Record<string, any>>;
 }
 
@@ -112,8 +114,16 @@ export const getIncrementalDiff = (
     const valNew = newObj[key];
     const valOld = currentOld[key];
 
-    // 0. Protection des données ignorées
-    if (rules && rules[path]?.type === "IGNORED") continue;
+    // 0. Protection des données ignorées dynamiquement ou statiquement
+    if (rules && rules[path]) {
+      if (rules[path].type === "IGNORED") continue;
+      if (
+        rules[path].ignoreIfKey &&
+        getValue(rootNew, rules[path].ignoreIfKey)
+      ) {
+        continue;
+      }
+    }
 
     // 1. Protection des données continues (Smart Detect + Dead Reckoning)
     if (rules && rules[path]?.type === "CONTINUOUS") {

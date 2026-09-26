@@ -145,9 +145,6 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       }
 
       onUpdateRef.current(uiState);
-
-      const isAdActive = !!fullState.state?.isAd;
-
       // =========================================================================
       // BOOTSTRAP & GESTION DES REDIRECTIONS DE CHARGEMENT
       // =========================================================================
@@ -274,10 +271,22 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
             expectedStateRef.current = undefined;
             isApplyingStateRef.current = false;
           }
-        } else if (actual !== null && isAdActive) {
-          // 🛡️ Pause le timer de convergence tant qu'une pub est en cours
+        }
+        
+        let isPlayerHijacked = false;
+        if (rulesRef.current && fullState.state) {
+          for (const key in fullState.state) {
+            if (rulesRef.current[key]?.hijacksPlayer && fullState.state[key]) {
+              isPlayerHijacked = true;
+              break;
+            }
+          }
+        }
+
+        if (isPlayerHijacked) {
+          // 🛡️ Pause le timer de convergence tant que le lecteur est hijacké (ex: pub)
           expected.initTs = Date.now();
-        } else if (actual !== null && !isAdActive) {
+        } else if (actual !== null && !isPlayerHijacked) {
           if (rulesRef.current && Object.keys(rulesRef.current).length > 0) {
               const nowTs = Date.now();
               let isMissionAccomplished = true;
@@ -313,6 +322,10 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
                   rule?.type === "IGNORED" ||
                   rule?.controllable === false
                 ) {
+                  continue;
+                }
+                
+                if (rule?.ignoreIfKey && expected[rule.ignoreIfKey]) {
                   continue;
                 }
 
@@ -386,7 +399,8 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
                     const rule = rulesRef.current?.[key];
                     if (
                       rule?.type === "IGNORED" ||
-                      rule?.controllable === false
+                      rule?.controllable === false ||
+                      (rule?.ignoreIfKey && expected[rule.ignoreIfKey])
                     )
                       continue;
 
@@ -420,12 +434,22 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       // =========================================================================
       // CALCUL DU DIFF INCRÉMENTAL & ÉMISSION SPONTANÉE
       // =========================================================================
-      // 🛡️ Quand on applique un ordre du serveur ou qu'une pub est en cours,
+      // 🛡️ Quand on applique un ordre du serveur ou que le lecteur est hijacké (ex: pub),
       // on bloque les diffs des champs contrôlables (time, paused, playbackRate)
-      // pour éviter les échos de seek/pause. Seuls les champs readOnly (ex: isAd)
+      // pour éviter les échos de seek/pause. Seuls les champs incontrôlables
       // sont autorisés à passer — exactement comme l'ancien shouldBlockMediaDiff.
+      let isPlayerHijackedLocal = false;
+      if (rulesRef.current && fullState.state) {
+        for (const key in fullState.state) {
+          if (rulesRef.current[key]?.hijacksPlayer && fullState.state[key]) {
+            isPlayerHijackedLocal = true;
+            break;
+          }
+        }
+      }
+
       const shouldBlockControllableDiffs =
-        isApplyingStateRef.current || isAdActive;
+        isApplyingStateRef.current || isPlayerHijackedLocal;
 
       let stateForDiff: any;
       if (shouldBlockControllableDiffs) {
