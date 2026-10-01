@@ -10,6 +10,7 @@ type AppState = "HOME" | "GROUP" | "WATCH";
 function App() {
   const [state, setState] = useState<AppState>("HOME");
   const [roomId, setRoomId] = useState("");
+  const [myId, setMyId] = useState("");
   const [isHost, setIsHost] = useState(false);
   const [members, setMembers] = useState<any[]>([]);
   const [activeUrl, setActiveUrl] = useState<string | null>(null);
@@ -17,7 +18,6 @@ function App() {
   const [roomState, setRoomState] = useState<any>(null); // 🧠 Seed d'état pour le SyncEngine
   const [clockOffset, setClockOffset] = useState(0); // ⏱️ Différence entre serveur et local
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<Record<string, any>>({});
 
   const stateRef = useRef<AppState>(state);
   stateRef.current = state;
@@ -35,25 +35,25 @@ function App() {
 
       if (payload.type === "ROOM_CREATED") {
         setRoomId(payload.roomId);
+        if (payload.myId) setMyId(payload.myId);
         setIsHost(true);
         if (payload.members) setMembers(payload.members);
         if (payload.sessionId) {
           setCurrentSessionId(payload.sessionId);
           currentSessionIdRef.current = payload.sessionId;
         }
-        if (payload.sessions) setSessions(payload.sessions);
         setState("GROUP");
 
         invoke("set_view_mode", { mode: "HOME" });
       } else if (payload.type === "JOIN_SUCCESS") {
         setRoomId(payload.roomId);
+        if (payload.myId) setMyId(payload.myId);
         setIsHost(false);
         if (payload.members) setMembers(payload.members);
         if (payload.sessionId) {
           setCurrentSessionId(payload.sessionId);
           currentSessionIdRef.current = payload.sessionId;
         }
-        if (payload.sessions) setSessions(payload.sessions);
 
         // Arrivée systématique sur le Dashboard (Option A)
         setState("GROUP");
@@ -64,11 +64,40 @@ function App() {
           currentSessionIdRef.current = payload.sessionId;
         }
       } else if (payload.type === "MEMBERS_UPDATE") {
-        if (payload.members) setMembers(payload.members);
-        if (payload.sessions) setSessions(payload.sessions);
+        if (payload.members) {
+          setMembers((prev) => {
+            return payload.members.map((newMember: any) => {
+              const oldMember = prev.find((m) => m.id === newMember.id);
+              return {
+                ...newMember,
+                activeUrl: newMember.activeUrl !== undefined ? newMember.activeUrl : oldMember?.activeUrl,
+                state: newMember.activeUrl === null 
+                  ? {} 
+                  : (newMember.state !== undefined ? newMember.state : oldMember?.state),
+              };
+            });
+          });
+        }
       } else if (payload.type === "SYNC_ORDER") {
         const s = payload.data || payload;
         const orderSessionId = payload.sessionId;
+        const senderId = payload.senderId;
+
+        if (senderId && (s.state || s.activeUrl)) {
+          setMembers((prev) => {
+             return prev.map(m => {
+               if (m.id === senderId) {
+                 return {
+                   ...m,
+                   sessionId: orderSessionId || m.sessionId,
+                   activeUrl: s.activeUrl !== undefined ? s.activeUrl : m.activeUrl,
+                   state: s.state ? { ...(m.state || {}), ...s.state } : m.state
+                 };
+               }
+               return m;
+             });
+          });
+        }
 
         // Si l'on est au menu du salon (GROUP)
         if (stateRef.current !== "WATCH") {
@@ -137,8 +166,8 @@ function App() {
     setActiveUrl(null);
     setActivePluginId(null);
     setCurrentSessionId(null);
-    setSessions({});
     invoke("set_view_mode", { mode: "HOME" });
+    socket.emit("LEAVE_ROOM");
   };
 
   const handleAutoNavigate = (targetUrl: string | null) => {
@@ -177,6 +206,7 @@ function App() {
           isHost={isHost}
           members={members}
           currentSessionId={currentSessionId}
+          myId={myId}
           onSelectSource={handleSelectSource}
           onJoinSession={handleJoinSession}
         />
@@ -192,7 +222,7 @@ function App() {
           initialRoomState={roomState}
           clockOffset={clockOffset}
           currentSessionId={currentSessionId}
-          sessions={sessions}
+          myId={myId}
           onLeave={handleLeave}
           onStop={handleStopWatching}
           onNavigate={handleAutoNavigate}

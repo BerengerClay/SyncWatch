@@ -22,7 +22,7 @@ class CanalPlusPlugin extends BaseSyncPlugin {
   }
 
   showTitle() {
-    return this.aggregatedState?.title || "Canal+";
+    return this.aggregatedState?.title || undefined;
   }
 
   getContentTop() {

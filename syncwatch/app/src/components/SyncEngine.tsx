@@ -24,8 +24,15 @@ interface SyncEngineProps {
 }
 
 /**
- * Moteur Client de Synchronisation SyncWatch.
- * Gère le "Field Locking" pour la convergence optimiste.
+ * SyncEngine : Le Cœur Réseau & Synchronisation (Le chef d'orchestre)
+ * 
+ * Rôle principal :
+ * 1. Écouter le lecteur webview (via Tauri) pour détecter les actions locales de l'utilisateur.
+ * 2. Écouter le serveur (via Socket.io) pour recevoir les actions des autres utilisateurs.
+ * 3. Gérer la "Convergence Optimiste" : quand on reçoit un ordre réseau (ex: Pause), 
+ *    on ignore temporairement nos propres événements locaux pour éviter de boucler à l'infini (effet d'écho).
+ * 
+ * Ce composant n'affiche aucune UI (il retourne `null`), c'est un pur moteur logique "en arrière-plan".
  */
 export const SyncEngine: React.FC<SyncEngineProps> = ({
   isHost: _isHost,
@@ -73,6 +80,8 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
     return false;
   };
 
+  // `expectedStateRef` : Ce qu'on ATTEND du lecteur vidéo après avoir reçu un ordre du serveur.
+  // Tant que le lecteur local n'a pas atteint cet état (ex: time=12.5), on ignore les événements locaux contraires.
   const expectedStateRef = useRef<any>(
     initialRoomState?.state !== undefined ?
       {
@@ -84,15 +93,19 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       }
     : null,
   );
+  // Booléen pour savoir si on est actuellement en train d'appliquer un ordre externe
   const isApplyingStateRef = useRef<boolean>(
     initialRoomState?.state !== undefined,
   );
 
+  // Les règles du plugin actuel (ex: YouTube) qui dictent comment chaque champ se synchronise
   const rulesRef = useRef<Record<string, SyncRule> | null>(
     initialRoomState?.rules && Object.keys(initialRoomState.rules).length > 0 ?
       initialRoomState.rules
     : null,
   );
+  
+  // `lastStateRef` : Le dernier état stable validé par le système. Sert de base de comparaison pour envoyer la différence (diff).
   const lastStateRef = useRef<any>(
     initialRoomState?.state ? structuredClone(initialRoomState.state) : null,
   );
@@ -109,6 +122,8 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
   );
   const expectedTargetUrlRef = useRef<string | null>(null);
 
+  // Initialisation : si on rejoint une session qui a déjà une vidéo en cours,
+  // on enregistre cette URL pour savoir qu'on ne fait pas une "nouvelle navigation".
   useEffect(() => {
     if (
       sessionActiveUrl &&
@@ -119,8 +134,19 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
     }
   }, [sessionActiveUrl]);
 
+  // =========================================================================
+  // LE CŒUR DU RÉACTEUR : ÉCOUTE DES ÉVÉNEMENTS
+  // =========================================================================
   useEffect(() => {
+    // Le drapeau `isMounted` est vital. Il empêche les "Zombie Listeners" (Écouteurs fantômes).
+    // Si React détruit ce composant, on lève le drapeau. Si Tauri tarde à couper l'écouteur,
+    // ce drapeau bloquera l'envoi d'actions parasites (comme l'envoi de `time: 0` de l'ancienne vidéo).
+    let isMounted = true;
+
+    // 1. Écoute du Lecteur Webview (Tauri)
+    // C'est ici qu'on reçoit l'état local du lecteur (pause, time, etc.) environ 10 à 20 fois par seconde.
     const unlistenTauri = listen("player-update", (event: any) => {
+      if (!isMounted) return;
       const { ts, fullState, ...restOfPayload } = event.payload;
       if (!fullState) return;
 
@@ -268,6 +294,12 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
         return;
       }
 
+      // =========================================================================
+      // VÉRIFICATION D'APPLICATION DES ORDRES (Convergence)
+      // =========================================================================
+      // Si on est en train d'appliquer un ordre (ex: le serveur a dit "Pause à 12s"),
+      // on vérifie si notre lecteur local a bien atteint cet état.
+      // Tant que ce n'est pas le cas, on bloque toute émission d'ordre contradictoire.
       if (
         isApplyingStateRef.current &&
         expectedStateRef.current !== undefined
@@ -436,10 +468,11 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       // =========================================================================
       // CALCUL DU DIFF INCRÉMENTAL & ÉMISSION SPONTANÉE
       // =========================================================================
-      // 🛡️ Quand on applique un ordre du serveur ou que le lecteur est hijacké (ex: pub),
-      // on bloque les diffs des champs contrôlables (time, paused, playbackRate)
-      // pour éviter les échos de seek/pause. Seuls les champs incontrôlables
-      // sont autorisés à passer — exactement comme l'ancien shouldBlockMediaDiff.
+      // 🛡️ Blocage des échos réseau :
+      // Quand on applique un ordre du serveur ou que le lecteur est hijacké (ex: par une pub),
+      // on filtre temporairement les champs "contrôlables" (time, paused, playbackRate).
+      // On autorise uniquement la synchronisation des données incontrôlables (ex: le titre de la vidéo),
+      // pour éviter qu'une pub de 30s n'envoie "Pause" à tous les autres utilisateurs.
       const isPlayerHijackedLocal = checkPlayerHijacked(fullState.state);
 
       const shouldBlockControllableDiffs =
@@ -458,6 +491,9 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
         stateForDiff = stateToDiff;
       }
 
+      // Utilisation d'un algorithme intelligent pour ne détecter et n'envoyer 
+      // QUE les changements réels (ex: si seul "paused" passe de false à true).
+      // Ça réduit massivement la bande passante et l'effet "spam".
       const patch = getIncrementalDiff(
         stateForDiff,
         lastStateRef.current || {},
@@ -482,14 +518,25 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       }
 
       let finalPatch = patch;
+
+      // ... (Si on vient de changer de page, on force l'envoi d'un état complet pour le nouveau spectateur)
       if (needsFullStateOnNextDiffRef.current) {
         console.log(
           "[SyncEngine] 🚀 Envoi d'un state complet suite à une navigation (différé)",
         );
-        finalPatch = { ...stateForDiff };
+        // Snapshot complet : on utilise stateToDiff (état brut du plugin)
+        // et PAS stateForDiff qui a déjà été filtré par shouldBlockControllableDiffs
+        // (ex: pendant une pub, time/paused sont retirés de stateForDiff).
+        const rules = rulesRef.current || {};
+        finalPatch = {};
+        for (const key in stateToDiff) {
+          if (rules[key]?.type === "IGNORED") continue;
+          finalPatch[key] = stateToDiff[key];
+        }
         needsFullStateOnNextDiffRef.current = false;
       }
 
+      // 📤 SI on a trouvé des différences (finalPatch n'est pas vide), on les envoie au réseau
       if (finalPatch && Object.keys(finalPatch).length > 0) {
         console.log("[SyncEngine] 📤 Action utilisateur émise :", finalPatch);
 
@@ -501,7 +548,11 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       }
     });
 
+    // 2. Écoute du Serveur (Socket.io)
+    // C'est ici qu'on reçoit les ordres ("SYNC_ORDER") provenant des amis du salon.
     const unlistenSocket = listenToServer((packet: any) => {
+      if (!isMounted) return;
+
       if (packet.type === "MEMBERS_UPDATE") {
         onMembersUpdateRef.current?.(packet.members || []);
         return;
@@ -561,6 +612,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
           );
         }
 
+        // Dès qu'on reçoit un "patch" d'un ami, on prépare la machine à appliquer l'ordre
         if (patch.state !== undefined) {
           isApplyingStateRef.current = true;
           expectedStateRef.current = {
@@ -579,6 +631,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
         lastStateTsRef.current =
           packet.ts ? packet.ts - clockOffsetRef.current : Date.now();
 
+        // 📥 Finalement, on donne l'ordre direct à Tauri/JS de bouger le lecteur
         if (patch.state !== undefined && !isNavigatingToNewUrl) {
           invoke("playback_control", {
             command: "APPLY_STATE",
@@ -590,11 +643,13 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       }
     });
 
+    // Nettoyage impératif à la destruction du composant
     return () => {
-      unlistenTauri.then((u) => u());
-      unlistenSocket();
+      isMounted = false; // Lève le drapeau anti-fantômes
+      unlistenTauri.then((u) => u()); // Coupe le flux Tauri
+      unlistenSocket(); // Coupe le flux Serveur
     };
   }, []);
 
-  return null;
+  return null; // Pas d'UI
 };

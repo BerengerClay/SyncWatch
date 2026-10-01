@@ -7,6 +7,7 @@ interface Props {
   isHost: boolean;
   members: any[];
   currentSessionId?: string | null;
+  myId?: string;
   onSelectSource: (targetUrl: string, pluginId: string) => void;
   onJoinSession?: (sessionId: string) => void;
 }
@@ -23,6 +24,7 @@ export const GroupDashboard: React.FC<Props> = ({
   isHost,
   members,
   currentSessionId,
+  myId,
   onSelectSource,
   onJoinSession,
 }) => {
@@ -109,11 +111,11 @@ export const GroupDashboard: React.FC<Props> = ({
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-black text-white">{m.name}</span>
                           <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold uppercase tracking-wider">
-                            {m.paused ? '⏸ En pause' : '▶ En lecture'}
+                            {m.state?.paused ? '⏸ En pause' : '▶ En lecture'}
                           </span>
                         </div>
                         <span className="text-xs text-slate-400 truncate max-w-[340px] mt-0.5">
-                          {m.state?.title || m.state?.name || 'Vidéo en cours'}
+                          {m.state?.uiTitle || 'Vidéo en cours'}
                         </span>
                       </div>
                     </div>
@@ -186,16 +188,21 @@ export const GroupDashboard: React.FC<Props> = ({
               </div>
             </div>
             <div className="flex -space-x-3">
-              {members.slice(0, 6).map((m, i) => (
-                <div 
-                  key={m.id} 
-                  title={m.name}
-                  className="w-10 h-10 rounded-full border-2 border-[#020617] flex items-center justify-center text-xs font-bold shadow-xl uppercase"
-                  style={{ backgroundColor: `hsl(${(i * 137) % 360}, 60%, 40%)` }}
-                >
-                  {m.name ? m.name.substring(0, 1) : '?'}
-                </div>
-              ))}
+              {members.slice(0, 6).map((m, i) => {
+                const isMe = m.id === myId;
+                return (
+                  <div 
+                    key={m.id} 
+                    title={isMe ? `${m.name} (Vous)` : m.name}
+                    className={`w-10 h-10 rounded-full border-2 flex items-center justify-center text-xs font-bold shadow-xl uppercase ${
+                      isMe ? 'border-emerald-400 ring-2 ring-emerald-500/50 z-10' : 'border-[#020617]'
+                    }`}
+                    style={{ backgroundColor: `hsl(${(i * 137) % 360}, 60%, 40%)` }}
+                  >
+                    {m.name ? m.name.substring(0, 1) : '?'}
+                  </div>
+                );
+              })}
               {members.length > 6 && (
                 <div className="w-10 h-10 rounded-full border-2 border-[#020617] bg-slate-900 flex items-center justify-center text-xs font-bold text-slate-500 shadow-xl">
                   +{members.length - 6}

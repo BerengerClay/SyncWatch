@@ -35,7 +35,7 @@ class TF1Plugin extends BaseSyncPlugin {
   }
 
   showTitle() {
-    return this.aggregatedState?.tf1Title || "TF1+";
+    return this.aggregatedState?.tf1Title || undefined;
   }
 
   getContentTop() {

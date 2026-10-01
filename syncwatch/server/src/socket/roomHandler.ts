@@ -44,12 +44,22 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
     });
   });
 
-  const getExtrapolatedSessions = (room: Room) => {
-    const extrapolated: Record<string, any> = {};
-    for (const [id, session] of Object.entries(room.sessions)) {
-      extrapolated[id] = extrapolateSession(session).state;
-    }
-    return extrapolated;
+  const getUIMembers = (room: Room, includeState: boolean) => {
+    return room.members.map((m) => {
+      const state = m.state || {};
+      const uiState: any = {};
+      
+      if (state.uiTitle !== undefined) uiState.uiTitle = state.uiTitle;
+      if (state.uiSubtitle !== undefined) uiState.uiSubtitle = state.uiSubtitle;
+      if (state.isAd !== undefined) uiState.isAd = state.isAd;
+
+      const hasState = Object.keys(uiState).length > 0;
+
+      return {
+        ...m,
+        state: includeState && hasState ? uiState : undefined,
+      };
+    });
   };
 
   /**
@@ -57,10 +67,8 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
    * (Arrivée, Départ, Changement de session)
    */
   const broadcastMembers = (room: Room) => {
-    const sessions = getExtrapolatedSessions(room);
     io.to(room.id).emit("MEMBERS_UPDATE", {
-      members: room.members,
-      sessions,
+      members: getUIMembers(room, false),
     });
     monitor.logMessage({
       socketId: "server",
@@ -69,7 +77,6 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
       event: "MEMBERS_UPDATE",
       data: {
         membersCount: room.members.length,
-        sessionsCount: Object.keys(room.sessions).length,
       },
     });
     monitor.broadcastSnapshot(getAllRooms());
@@ -85,9 +92,9 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
     socket.emit("ROOM_CREATED", {
       roomId: room.id,
       hostId: socket.id,
+      myId: socket.id,
       sessionId: hostSessionId,
-      members: room.members,
-      sessions: getExtrapolatedSessions(room),
+      members: getUIMembers(room, true),
     });
 
     broadcastMembers(room);
@@ -108,17 +115,30 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
       socket.emit("JOIN_SUCCESS", {
         roomId,
         hostId: room.hostId,
+        myId: socket.id,
         sessionId: targetSessionId,
         ts: Date.now(),
-        initialState: null,
-        members: room.members,
-        sessions: getExtrapolatedSessions(room),
+        members: getUIMembers(room, true),
       });
 
       broadcastMembers(room);
       console.log(`[ROOM] User ${userName} (${socket.id}) joined room ${roomId} in lobby`);
     }
   );
+
+  // =========================================================================
+  // 2b. QUITTER LE SALON COMPLÈTEMENT
+  // =========================================================================
+  socket.on("LEAVE_ROOM", () => {
+    const results = removeMember(socket.id, socket.rooms);
+    for (const { room, roomDeleted } of results) {
+      socket.leave(room.id);
+      if (!roomDeleted) {
+        broadcastMembers(room);
+      }
+      console.log(`[ROOM] User ${socket.id} left room ${room.id}`);
+    }
+  });
 
   // =========================================================================
   // 3. REJOINDRE LA SESSION D'UN AMI ("Watch with")
@@ -222,8 +242,6 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
     const member = room.members.find((m) => m.id === socket.id);
     if (!member) return;
 
-    let hasStructuralChange = false;
-
     // 🔄 Détection et gestion du changement de vidéo (scission de session)
     if (packet.data.activeUrl) {
       const prevUrl = member.activeUrl;
@@ -237,7 +255,6 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
       );
 
       if (navResult.isNewSession) {
-        hasStructuralChange = true;
         socket.emit("SESSION_CHANGED", { sessionId: navResult.newSessionId });
         console.log(`[SESSION] 🔀 ${member.name} a créé la session ${navResult.newSessionId}`);
 
@@ -250,15 +267,20 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
           newUrl: packet.data.activeUrl,
           state: packet.data.state || member.state,
         });
+
+        broadcastMembers(room);
       } else if (packet.data.activeUrl && navResult.newSessionId !== navResult.oldSessionId) {
         // The user navigated naturally to an EXISTING session!
         // We must NOT overwrite the existing session's state with their dummy payload!
         // Instead, we pull the existing session's state and send it to them.
-        hasStructuralChange = true;
         socket.emit("SESSION_CHANGED", { sessionId: navResult.newSessionId });
         
         const existingSession = room.sessions[navResult.newSessionId];
         const { state, ts } = extrapolateSession(existingSession);
+        
+        // On met à jour l'état du membre localement
+        member.state = { ...existingSession.state };
+        member.activeUrl = existingSession.activeUrl;
         
         socket.emit("SYNC_ORDER", {
           sessionId: navResult.newSessionId,
@@ -266,6 +288,17 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
           data: {
             ...state,
             activeUrl: existingSession.activeUrl,
+          },
+        });
+        
+        // On notifie les autres membres du salon que cet utilisateur a rejoint la session
+        socket.to(room.id).emit("SYNC_ORDER", {
+          sessionId: navResult.newSessionId,
+          senderId: member.id,
+          ts,
+          data: {
+            activeUrl: existingSession.activeUrl,
+            state: existingSession.state,
           },
         });
         
@@ -330,12 +363,7 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
       data: { sessionId, patch: enhancedData },
     });
 
-    // MEMBERS_UPDATE n'est émis QUE s'il y a un changement de session/topologie
-    if (hasStructuralChange) {
-      broadcastMembers(room);
-    } else {
-      monitor.broadcastSnapshot(getAllRooms());
-    }
+    monitor.broadcastSnapshot(getAllRooms());
   });
 
   // =========================================================================

@@ -25,6 +25,8 @@ class YouTubePlugin extends BaseSyncPlugin {
     return {
       ...super.getSyncRules(),
       title: { type: "IGNORED" },
+      owner: { type: "IGNORED" },
+      adTitle: { type: "IGNORED" },
     };
   }
 
@@ -112,18 +114,18 @@ class YouTubePlugin extends BaseSyncPlugin {
 
   showTitle() {
     const isVideo = window.location.pathname.includes('/watch') || window.location.pathname.includes('/shorts/');
-    if (!isVideo) return null;
+    if (!isVideo) return undefined;
 
     const data = this.scrapeTopData();
-    return data.title || "Vidéo YouTube";
+    return data.title || undefined;
   }
 
   showSubtitle() {
     const isVideo = window.location.pathname.includes('/watch') || window.location.pathname.includes('/shorts/');
-    if (!isVideo) return null;
+    if (!isVideo) return undefined;
 
     const data = this.scrapeTopData();
-    return data.owner || "YouTube";
+    return data.owner || undefined;
   }
 
   // 2. L'ÉTAT SPÉCIFIQUE AU LECTEUR (La Pub)

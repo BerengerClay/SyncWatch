@@ -11,7 +11,7 @@ import {
   Users,
 } from "lucide-react";
 import { useWatchSession } from "../hooks/useWatchSession";
-import { MemberInfo, WatchSessionState } from "../types/sync";
+import { MemberInfo } from "../types/sync";
 
 // Indispensable pour que les plugins puissent utiliser React.createElement
 (window as any).React = React;
@@ -24,7 +24,7 @@ interface Props {
   activePluginId: string | null;
   clockOffset: number;
   currentSessionId?: string | null;
-  sessions?: Record<string, WatchSessionState>;
+  myId?: string;
   onLeave: () => void;
   onStop: () => void;
   onNavigate?: (targetUrl: string) => void;
@@ -42,7 +42,7 @@ export const WatchScreen: React.FC<Props> = ({
   activePluginId,
   clockOffset,
   currentSessionId,
-  sessions: _sessions = {},
+  myId,
   onLeave,
   onStop,
   onNavigate,
@@ -53,13 +53,15 @@ export const WatchScreen: React.FC<Props> = ({
   const {
     pluginState,
     currentLocalUrl,
-    selectedMember,
-    setSelectedMember,
+    selectedMemberId,
+    setSelectedMemberId,
     PluginUI,
     handleUpdate,
     handleControl,
     handleJoinFriend,
   } = useWatchSession({ activeUrl, onJoinSession });
+
+  const selectedMember = members.find((m) => m.id === selectedMemberId) || null;
 
   const getDisplayDomain = (url: string | null) => {
     if (!url) return null;
@@ -147,14 +149,16 @@ export const WatchScreen: React.FC<Props> = ({
             <div className="flex -space-x-1.5">
               {members.map((m, i) => {
                 const isWithMe = m.sessionId === currentSessionId;
+                const isMe = m.id === myId;
+                const displayState = isMe && pluginState ? pluginState : m.state;
                 return (
                   <button
                     key={m.id}
-                    onClick={() => setSelectedMember(m)}
-                    title={`${m.name} : ${getStateTitle(m.state) || "En navigation"}${getStateSubtitle(m.state) ? ` - ${getStateSubtitle(m.state)}` : ""} ${isWithMe ? "(Avec vous)" : "(Cliquer pour voir)"}`}
+                    onClick={() => setSelectedMemberId(m.id)}
+                    title={`${isMe ? "(Vous) " : ""}${m.name} : ${getStateTitle(displayState) || "En navigation"}${getStateSubtitle(displayState) ? ` - ${getStateSubtitle(displayState)}` : ""} ${isWithMe ? "(Avec vous)" : "(Cliquer pour voir)"}`}
                     className={`w-5 h-5 rounded-full border border-[#020617] flex items-center justify-center text-[8px] font-black uppercase overflow-hidden transition-all duration-300 hover:scale-125 cursor-pointer ${
-                      isWithMe ?
-                        "ring-1 ring-emerald-400/80 shadow-[0_0_8px_rgba(52,211,153,0.3)]"
+                      isMe ? "ring-2 ring-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)] z-10" :
+                      isWithMe ? "ring-1 ring-emerald-400/80 shadow-[0_0_8px_rgba(52,211,153,0.3)]"
                       : "opacity-70 hover:opacity-100 ring-1 ring-indigo-500/40"
                     }`}
                     style={{
@@ -272,7 +276,7 @@ export const WatchScreen: React.FC<Props> = ({
                 {selectedMember.name}
               </span>
               <button
-                onClick={() => setSelectedMember(null)}
+                onClick={() => setSelectedMemberId(null)}
                 className="text-slate-400 hover:text-white text-xs cursor-pointer"
               >
                 ✕
@@ -285,13 +289,13 @@ export const WatchScreen: React.FC<Props> = ({
               </div>
               <div className="p-2 bg-white/5 rounded-lg flex flex-col gap-1 overflow-hidden">
                 <span className="text-slate-200 truncate font-medium text-[11px]">
-                  {getStateTitle(selectedMember.state) ||
+                  {getStateTitle(selectedMember.id === myId && pluginState ? pluginState : selectedMember.state) ||
                     selectedMember.activeUrl ||
                     "En navigation libre"}
                 </span>
-                {getStateSubtitle(selectedMember.state) && (
+                {getStateSubtitle(selectedMember.id === myId && pluginState ? pluginState : selectedMember.state) && (
                   <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider truncate">
-                    {getStateSubtitle(selectedMember.state)}
+                    {getStateSubtitle(selectedMember.id === myId && pluginState ? pluginState : selectedMember.state)}
                   </span>
                 )}
               </div>

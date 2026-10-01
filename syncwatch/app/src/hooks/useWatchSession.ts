@@ -10,7 +10,7 @@ interface UseWatchSessionProps {
 export function useWatchSession({ activeUrl, onJoinSession }: UseWatchSessionProps) {
   const [pluginState, setPluginState] = useState<Record<string, any> | null>(null);
   const [currentLocalUrl, setCurrentLocalUrl] = useState<string | null>(activeUrl);
-  const [selectedMember, setSelectedMember] = useState<MemberInfo | null>(null);
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
 
   const [PluginUI, setPluginUI] = useState<React.FC<any> | null>(null);
   const lastCode = useRef<string | null>(null);
@@ -58,14 +58,14 @@ export function useWatchSession({ activeUrl, onJoinSession }: UseWatchSessionPro
       onJoinSession(member.sessionId);
     }
 
-    setSelectedMember(null);
+    setSelectedMemberId(null);
   }, [onJoinSession]);
 
   return {
     pluginState,
     currentLocalUrl,
-    selectedMember,
-    setSelectedMember,
+    selectedMemberId,
+    setSelectedMemberId,
     PluginUI,
     handleUpdate,
     handleControl,
