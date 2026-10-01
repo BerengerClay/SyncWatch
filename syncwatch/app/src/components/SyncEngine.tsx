@@ -63,11 +63,24 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
   // =========================================================================
   // MACHINE À ÉTATS DE SYNCHRONISATION & CONVERGENCE
   // =========================================================================
+
+  /** Vérifie si un état hijacksPlayer est actif (ex: publicité en cours) */
+  const checkPlayerHijacked = (state: any): boolean => {
+    if (!rulesRef.current || !state) return false;
+    for (const key in state) {
+      if (rulesRef.current[key]?.hijacksPlayer && state[key]) return true;
+    }
+    return false;
+  };
+
   const expectedStateRef = useRef<any>(
     initialRoomState?.state !== undefined ?
       {
         ...initialRoomState.state,
-        ts: initialRoomState.lastUpdate ? initialRoomState.lastUpdate - clockOffset : Date.now(),
+        ts:
+          initialRoomState.lastUpdate ?
+            initialRoomState.lastUpdate - clockOffset
+          : Date.now(),
       }
     : null,
   );
@@ -85,7 +98,6 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
   );
   const lastStateTsRef = useRef<number>(initialRoomState?.ts || Date.now());
   const hasSyncedRulesToServerRef = useRef<boolean>(false);
-
 
   // Indique si le plugin a déjà renvoyé un rapport de lecture depuis le montage
   const hasReceivedFirstMediaUpdateRef = useRef<boolean>(false);
@@ -201,10 +213,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
               const stateOrder: any = {};
               for (const key in fullExpected) {
                 const rule = rulesRef.current?.[key];
-                if (
-                  rule?.type === "IGNORED" ||
-                  rule?.controllable === false
-                )
+                if (rule?.type === "IGNORED" || rule?.controllable === false)
                   continue;
                 stateOrder[key] = fullExpected[key];
               }
@@ -272,109 +281,35 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
             isApplyingStateRef.current = false;
           }
         }
-        
-        let isPlayerHijacked = false;
-        if (rulesRef.current && fullState.state) {
-          for (const key in fullState.state) {
-            if (rulesRef.current[key]?.hijacksPlayer && fullState.state[key]) {
-              isPlayerHijacked = true;
-              break;
-            }
-          }
-        }
+
+        const isPlayerHijacked = checkPlayerHijacked(fullState.state);
 
         if (isPlayerHijacked) {
           // 🛡️ Pause le timer de convergence tant que le lecteur est hijacké (ex: pub)
           expected.initTs = Date.now();
-        } else if (actual !== null && !isPlayerHijacked) {
+        } else if (actual !== null) {
           if (rulesRef.current && Object.keys(rulesRef.current).length > 0) {
-              const nowTs = Date.now();
-              let isMissionAccomplished = true;
-              const isTargetPlaying =
-                expected.paused !== undefined ?
-                  !expected.paused
-                : !actual.paused;
+            const nowTs = Date.now();
+            let isMissionAccomplished = true;
+            const divergentKeys = new Set<string>();
+            const isTargetPlaying =
+              expected.paused !== undefined ? !expected.paused : !actual.paused;
 
-              console.log(
-                "[SyncEngine-DEBUG] Evaluating isMissionAccomplished. expected:",
-                expected,
-                "actual:",
-                actual,
-              );
+            console.log(
+              "[SyncEngine-DEBUG] Evaluating isMissionAccomplished. expected:",              expected,
+              "actual:",
+              actual,
+            );
 
-              if (actual.readyState === undefined || actual.readyState < 3) {
-                console.log(
-                  `[SyncEngine-DEBUG] isMissionAccomplished=false because video is buffering or not mounted (readyState: ${actual.readyState})`,
-                );
-                isMissionAccomplished = false;
-              } else {
-                for (const key in expected) {
-                if (key === "ts" || key === "lastShot" || key === "initTs")
-                  continue;
-                const expectedVal = expected[key];
-                if (expectedVal === undefined) continue;
-
-                const actualVal = actual[key];
-                const rule = rulesRef.current?.[key];
-                
-                // Si la règle dit explicitement IGNORED ou controllable=false, on ignore pour la convergence
+            if (rulesRef.current) {
+              for (const ruleKey in rulesRef.current) {
+                // On bloque la convergence si l'état dit vrai OU si le plugin n'a pas encore eu le temps d'envoyer l'état (undefined)
                 if (
-                  rule?.type === "IGNORED" ||
-                  rule?.controllable === false
-                ) {
-                  continue;
-                }
-                
-                if (rule?.ignoreIfKey && expected[rule.ignoreIfKey]) {
-                  continue;
-                }
-
-                if (rule?.blockingIfKey && actual[rule.blockingIfKey]) {
-                  console.log(
-                    `[SyncEngine-DEBUG] isMissionAccomplished=false because blocking key ${rule.blockingIfKey} is true`,
-                  );
-                  isMissionAccomplished = false;
-                  break;
-                }
-
-                const isContinuous = rule?.type === "CONTINUOUS" || key === "time";
-
-                if (isContinuous) {
-                  if (actualVal === undefined) {
-                    console.log(
-                      `[SyncEngine-DEBUG] isMissionAccomplished=false because actualVal for ${key} is undefined.`,
-                    );
-                    isMissionAccomplished = false;
-                    break;
-                  }
-                  const elapsed = Math.max(
-                    0,
-                    (nowTs - (expected.ts || nowTs)) / 1000,
-                  );
-                  const speed =
-                    actual.playbackRate || expected.playbackRate || 1.0;
-                  const targetTime =
-                    isTargetPlaying ?
-                      expectedVal + elapsed * speed
-                    : expectedVal;
-
-                  console.log(
-                    `[SyncEngine-DEBUG] Time calculation for ${key}: nowTs=${nowTs}, expected.ts=${expected.ts}, elapsed=${elapsed.toFixed(3)}s, speed=${speed}, isTargetPlaying=${isTargetPlaying}, expectedVal=${expectedVal}, targetTime=${targetTime.toFixed(3)}, actualVal=${actualVal.toFixed(3)}`
-                  );
-
-                  if (Math.abs(targetTime - actualVal) > 1.2) {
-                    console.log(
-                      `[SyncEngine-DEBUG] isMissionAccomplished=false because ${key} drift: Math.abs(${targetTime} - ${actualVal}) > 1.2`,
-                    );
-                    isMissionAccomplished = false;
-                    break;
-                  }
-                } else if (
-                  actualVal === undefined ||
-                  expectedVal !== actualVal
+                  rulesRef.current[ruleKey].preventsConvergence &&
+                  (actual[ruleKey] === undefined || actual[ruleKey])
                 ) {
                   console.log(
-                    `[SyncEngine-DEBUG] isMissionAccomplished=false because ${key} expected (${expectedVal}) !== actual (${actualVal})`,
+                    `[SyncEngine-DEBUG] isMissionAccomplished=false because convergence is prevented by ${ruleKey} (value: ${actual[ruleKey]})`,
                   );
                   isMissionAccomplished = false;
                   break;
@@ -382,52 +317,119 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
               }
             }
 
-            if (isMissionAccomplished) {
-                console.log(
-                  "[SyncEngine-DEBUG] Mission Accomplished! Canceling lock.",
-                );
-                lastStateRef.current = structuredClone(stateToDiff);
-                lastStateTsRef.current = ts;
-                expectedStateRef.current = undefined;
-                isApplyingStateRef.current = false;
-              } else {
-                if (!expected.lastShot || nowTs - expected.lastShot > 1000) {
-                  const stateOrder: any = {};
-                  for (const key in expected) {
-                    if (key === "ts" || key === "lastShot" || key === "initTs")
-                      continue;
-                    const rule = rulesRef.current?.[key];
-                    if (
-                      rule?.type === "IGNORED" ||
-                      rule?.controllable === false ||
-                      (rule?.ignoreIfKey && expected[rule.ignoreIfKey])
-                    )
-                      continue;
+            for (const key in expected) {
+              if (key === "ts" || key === "lastShot" || key === "initTs")
+                continue;
+              const expectedVal = expected[key];
+              if (expectedVal === undefined) continue;
 
-                    if (key === "time" && isTargetPlaying) {
-                      const elapsed = Math.max(
-                        0,
-                        (nowTs - (expected.ts || nowTs)) / 1000,
-                      );
-                      const speed =
-                        actual.playbackRate || expected.playbackRate || 1.0;
-                      stateOrder[key] = expected[key] + elapsed * speed;
-                    } else {
-                      stateOrder[key] = expected[key];
-                    }
-                  }
+              const actualVal = actual[key];
+              const rule = rulesRef.current?.[key];
+
+              // Si la règle dit explicitement IGNORED ou controllable=false, on ignore pour la convergence
+              if (rule?.type === "IGNORED" || rule?.controllable === false) {
+                continue;
+              }
+
+              if (rule?.ignoreIfKey && expected[rule.ignoreIfKey]) {
+                continue;
+              }
+
+              if (rule?.blockingIfKey && actual[rule.blockingIfKey]) {
+                console.log(
+                  `[SyncEngine-DEBUG] isMissionAccomplished=false because blocking key ${rule.blockingIfKey} is true`,
+                );
+                isMissionAccomplished = false;
+                continue;
+              }
+
+              const isContinuous = rule?.type === "CONTINUOUS";
+
+              if (isContinuous) {
+                if (actualVal === undefined) {
                   console.log(
-                    "[SyncEngine-DEBUG] Resending APPLY_STATE:",
+                    `[SyncEngine-DEBUG] isMissionAccomplished=false because actualVal for ${key} is undefined.`,
+                  );
+                  isMissionAccomplished = false;
+                  divergentKeys.add(key);
+                  continue;
+                }
+                const elapsed = Math.max(
+                  0,
+                  (nowTs - (expected.ts || nowTs)) / 1000,
+                );
+                const speed =
+                  actual.playbackRate || expected.playbackRate || 1.0;
+                const targetTime =
+                  isTargetPlaying ?
+                    expectedVal + elapsed * speed
+                  : expectedVal;
+
+                console.log(
+                  `[SyncEngine-DEBUG] Time calculation for ${key}: nowTs=${nowTs}, expected.ts=${expected.ts}, elapsed=${elapsed.toFixed(3)}s, speed=${speed}, isTargetPlaying=${isTargetPlaying}, expectedVal=${expectedVal}, targetTime=${targetTime.toFixed(3)}, actualVal=${actualVal.toFixed(3)}`,
+                );
+
+                // Tolérance dynamique: souple en lecture (absorbe le réseau), stricte en pause (précision absolue)
+                const driftThreshold = isTargetPlaying ? (rule?.driftThreshold || 1.2) : 0.05;
+
+                if (Math.abs(targetTime - actualVal) > driftThreshold) {
+                  console.log(
+                    `[SyncEngine-DEBUG] isMissionAccomplished=false because ${key} drift: Math.abs(${targetTime} - ${actualVal}) > ${driftThreshold}`,
+                  );
+                  isMissionAccomplished = false;
+                  divergentKeys.add(key);
+                }
+              } else if (
+                actualVal === undefined ||
+                expectedVal !== actualVal
+              ) {
+                console.log(
+                  `[SyncEngine-DEBUG] isMissionAccomplished=false because ${key} expected (${expectedVal}) !== actual (${actualVal})`,
+                );
+                isMissionAccomplished = false;
+                divergentKeys.add(key);
+              }
+            }
+
+            if (isMissionAccomplished) {
+              console.log(
+                "[SyncEngine-DEBUG] Mission Accomplished! Canceling lock.",
+              );
+              lastStateRef.current = structuredClone(stateToDiff);
+              lastStateTsRef.current = ts;
+              expectedStateRef.current = undefined;
+              isApplyingStateRef.current = false;
+            } else {
+              if (!expected.lastShot || nowTs - expected.lastShot > 1000) {
+                const stateOrder: any = {};
+                for (const key of divergentKeys) {
+                  if (key === "time" && isTargetPlaying) {
+                    const elapsed = Math.max(
+                      0,
+                      (nowTs - (expected.ts || nowTs)) / 1000,
+                    );
+                    const speed =
+                      actual.playbackRate || expected.playbackRate || 1.0;
+                    stateOrder[key] = expected[key] + elapsed * speed;
+                  } else {
+                    stateOrder[key] = expected[key];
+                  }
+                }
+                
+                if (Object.keys(stateOrder).length > 0) {
+                  console.log(
+                    "[SyncEngine-DEBUG] Resending APPLY_STATE (only divergent keys):",
                     stateOrder,
                   );
                   invoke("playback_control", {
                     command: "APPLY_STATE",
                     data: { state: stateOrder },
                   });
-                  expected.lastShot = nowTs;
                 }
+                expected.lastShot = nowTs;
               }
             }
+          }
         }
       }
 
@@ -438,15 +440,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       // on bloque les diffs des champs contrôlables (time, paused, playbackRate)
       // pour éviter les échos de seek/pause. Seuls les champs incontrôlables
       // sont autorisés à passer — exactement comme l'ancien shouldBlockMediaDiff.
-      let isPlayerHijackedLocal = false;
-      if (rulesRef.current && fullState.state) {
-        for (const key in fullState.state) {
-          if (rulesRef.current[key]?.hijacksPlayer && fullState.state[key]) {
-            isPlayerHijackedLocal = true;
-            break;
-          }
-        }
-      }
+      const isPlayerHijackedLocal = checkPlayerHijacked(fullState.state);
 
       const shouldBlockControllableDiffs =
         isApplyingStateRef.current || isPlayerHijackedLocal;
@@ -525,7 +519,10 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       if (packet.type === "JOIN_SUCCESS") {
         patch = packet.initialState;
         if (packet.members) onMembersUpdateRef.current?.(packet.members);
-      } else if (packet.type === "SYNC_ORDER") {
+      } else if (
+        packet.type === "SYNC_ORDER" ||
+        packet.type === "SYNC_STATE_PATCH"
+      ) {
         if (
           packet.sessionId &&
           currentSessionIdRef.current &&
@@ -562,8 +559,6 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
             clockOffsetRef.current,
             lastStateRef.current,
           );
-
-
         }
 
         if (patch.state !== undefined) {

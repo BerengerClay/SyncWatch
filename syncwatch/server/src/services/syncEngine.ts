@@ -37,33 +37,13 @@ export const deepMerge = (target: any, source: any): any => {
 };
 
 /**
- * Extrait l'identifiant canonique d'une vidéo/média pour ignorer les paramètres d'URL volatils
- * comme le timestamp (&t=15s) ou le tracking (&feature=shared).
+ * Vérifie si deux URLs pointent vers le même média.
+ * La canonicalisation (retrait des paramètres volatils) est déléguée aux plugins clients (ex: getCurrentUrl).
+ * Le moteur serveur reste ainsi 100% agnostique.
  */
-export const getCanonicalMediaId = (url: string | null | undefined): string | null => {
-  if (!url) return null;
-  try {
-    const u = new URL(url);
-    if (u.hostname.includes("youtube.com")) {
-      const v = u.searchParams.get("v");
-      if (v) return `yt:${v}`;
-      const shorts = u.pathname.match(/\/shorts\/([a-zA-Z0-9_-]+)/);
-      if (shorts) return `yt:${shorts[1]}`;
-    }
-    if (u.hostname === "youtu.be") {
-      return `yt:${u.pathname.slice(1).split("?")[0]}`;
-    }
-    return `${u.origin}${u.pathname}`.replace(/\/+$/, "");
-  } catch {
-    return url.trim();
-  }
-};
-
 export const isSameMedia = (urlA: string | null | undefined, urlB: string | null | undefined): boolean => {
-  const idA = getCanonicalMediaId(urlA);
-  const idB = getCanonicalMediaId(urlB);
-  if (!idA || !idB) return false;
-  return idA === idB;
+  if (!urlA || !urlB) return false;
+  return urlA.trim() === urlB.trim();
 };
 
 /**
@@ -108,13 +88,19 @@ export const extrapolateSession = (
  */
 export const processReactions = (
   data: any,
+  fullSessionState: any,
   rules: Record<string, SyncRule>,
   room: Room,
   sessionId: string,
   senderSocketId: string
 ): any => {
   const enhancedData = { ...data };
-  if (!enhancedData.state) return enhancedData;
+  if (data.state) {
+    enhancedData.state = JSON.parse(JSON.stringify(data.state));
+  }
+  
+  // On simule l'état complet après application du patch
+  const simulatedState = { ...(fullSessionState || {}), ...(data.state || {}) };
 
   const walk = (obj: any, parentPath = "") => {
     for (const key in obj) {
@@ -145,11 +131,21 @@ export const processReactions = (
         }
 
         if (shouldApply) {
-          const reaction = rule.reactions[String(val)];
-          if (reaction) {
-            Object.keys(reaction).forEach((targetPath) => {
-              setValue(enhancedData.state, targetPath, reaction[targetPath]);
-            });
+          // Les réactions "true" agissent comme des contraintes continues (ex: forcer la pause pendant la pub).
+          // Les réactions "false" n'agissent que comme des déclencheurs (ex: relancer la lecture à la fin de la pub).
+          // On n'applique donc une réaction "false" QUE si la clé a réellement changé dans ce patch !
+          const isKeyInPatch = data.state && getValue(data.state, currentPath) !== undefined;
+          
+          if (val === false && !isKeyInPatch) {
+            // On ignore la réaction passive
+          } else {
+            const reaction = rule.reactions[String(val)];
+            if (reaction) {
+              Object.keys(reaction).forEach((targetPath) => {
+                if (!enhancedData.state) enhancedData.state = {};
+                setValue(enhancedData.state, targetPath, reaction[targetPath]);
+              });
+            }
           }
         }
       }
@@ -160,6 +156,6 @@ export const processReactions = (
     }
   };
 
-  walk(data.state);
+  walk(simulatedState);
   return enhancedData;
 };

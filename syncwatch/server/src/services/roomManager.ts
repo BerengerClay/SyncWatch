@@ -27,6 +27,15 @@ export const getRoomBySocket = (
 const generateSessionId = (socketId: string): string =>
   `${socketId.substring(0, 6)}_${Date.now().toString(36)}`;
 
+const createEmptySession = (id: string, rules?: Record<string, SyncRule>): WatchSession => ({
+  id,
+  activeUrl: null,
+  activePluginId: null,
+  state: {},
+  rules: rules || {},
+  lastUpdate: Date.now(),
+});
+
 /**
  * 1. Création d'un nouveau salon avec une session initiale
  */
@@ -37,14 +46,7 @@ export const createRoom = (
   const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
   const hostSessionId = generateSessionId(socketId);
 
-  const initialSession: WatchSession = {
-    id: hostSessionId,
-    activeUrl: null,
-    activePluginId: null,
-    state: {},
-    rules: {},
-    lastUpdate: Date.now(),
-  };
+  const initialSession = createEmptySession(hostSessionId);
 
   const room: Room = {
     id: roomId,
@@ -82,14 +84,7 @@ export const joinRoom = (
 
   // Chaque membre commence dans sa propre session vierge dans le lobby
   const userSessionId = generateSessionId(socketId);
-  room.sessions[userSessionId] = {
-    id: userSessionId,
-    activeUrl: null,
-    activePluginId: null,
-    state: {},
-    rules: {},
-    lastUpdate: Date.now(),
-  };
+  room.sessions[userSessionId] = createEmptySession(userSessionId);
 
   room.members.push({
     id: socketId,
@@ -117,14 +112,7 @@ export const leaveSessionToLobby = (
   member.activeUrl = null;
   member.state = {};
 
-  room.sessions[newSessionId] = {
-    id: newSessionId,
-    activeUrl: null,
-    activePluginId: null,
-    state: {},
-    rules: {},
-    lastUpdate: Date.now(),
-  };
+  room.sessions[newSessionId] = createEmptySession(newSessionId);
 
   cleanupOrphanSessions(room);
   return { member, newSessionId };
@@ -204,22 +192,34 @@ export const handleVideoNavigation = (
     (m) => m.sessionId === oldSessionId && m.id !== member.id
   );
 
-  // Création d'une nouvelle session dédiée à cette nouvelle vidéo
-  const newSessionId = generateSessionId(member.id);
-  member.sessionId = newSessionId;
-  member.activeUrl = activeUrl;
-  if (state) member.state = { ...state };
+  // Recherche d'une session existante avec le même média
+  const existingSessionId = Object.keys(room.sessions).find(
+    (sId) => isSameMedia(room.sessions[sId].activeUrl, activeUrl)
+  );
 
-  const newSession: WatchSession = {
-    id: newSessionId,
-    activeUrl,
-    activePluginId: activePluginId || "youtube",
-    state: state || {},
-    rules: rules || currentSession?.rules || {},
-    lastUpdate: Date.now(),
-  };
+  let newSessionId: string;
+  let isNewSession = false;
 
-  room.sessions[newSessionId] = newSession;
+  if (existingSessionId && existingSessionId !== oldSessionId) {
+    newSessionId = existingSessionId;
+    member.sessionId = newSessionId;
+    member.activeUrl = activeUrl;
+    // On ne met pas à jour l'état du membre ici car il rejoint une session existante (géré par roomHandler)
+  } else {
+    // Création d'une nouvelle session dédiée à cette nouvelle vidéo
+    newSessionId = generateSessionId(member.id);
+    member.sessionId = newSessionId;
+    member.activeUrl = activeUrl;
+    if (state) member.state = { ...state };
+
+    const newSession = createEmptySession(newSessionId, rules || currentSession?.rules);
+    newSession.activeUrl = activeUrl;
+    newSession.activePluginId = activePluginId || null;
+    newSession.state = state || {};
+
+    room.sessions[newSessionId] = newSession;
+    isNewSession = true;
+  }
 
   // Nettoyage de l'ancienne session si elle est devenue vide
   if (othersInOldSession.length === 0 && oldSessionId && oldSessionId !== newSessionId) {
@@ -230,7 +230,7 @@ export const handleVideoNavigation = (
     room.defaultSessionId = newSessionId;
   }
 
-  return { newSessionId, oldSessionId, isNewSession: true };
+  return { newSessionId, oldSessionId, isNewSession };
 };
 
 /**
@@ -243,14 +243,7 @@ export const updateSessionState = (
 ): WatchSession => {
   let session = room.sessions[sessionId];
   if (!session) {
-    session = {
-      id: sessionId,
-      activeUrl: null,
-      activePluginId: null,
-      state: {},
-      rules: patch.rules || {},
-      lastUpdate: Date.now(),
-    };
+    session = createEmptySession(sessionId, patch.rules);
     room.sessions[sessionId] = session;
   } else {
     // ⚡ Extrapole l'état actuel de la session jusqu'à MAINTENANT

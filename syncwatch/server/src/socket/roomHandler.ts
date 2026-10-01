@@ -281,6 +281,7 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
     // Application du moteur de réactions (pubs collectives, etc.)
     const enhancedData = processReactions(
       packet.data,
+      session.state,
       session.rules || {},
       room,
       sessionId,
@@ -293,14 +294,30 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
       member.state = { ...(member.state || {}), ...packet.data.state };
     }
 
-
-
     // Mise à jour de l'état de la session
     updateSessionState(room, sessionId, enhancedData);
 
-    // Diffusion de l'ordre de lecture à TOUTE la salle (y compris l'émetteur)
-    io.to(room.id).emit("SYNC_ORDER", {
+    // Vérifier si le serveur a modifié la requête (via processReactions)
+    let isEcho = true;
+    if (enhancedData.state && packet.data.state) {
+      for (const key in enhancedData.state) {
+        if (enhancedData.state[key] !== packet.data.state[key]) {
+          isEcho = false;
+          break;
+        }
+      }
+    } else if (enhancedData.state !== packet.data.state) {
+      isEcho = false;
+    }
+
+    // Si c'est un pur écho (aucune règle n'a altéré la commande),
+    // on ne la renvoie pas à l'émetteur pour éviter qu'il ne se verrouille sur sa propre action.
+    // S'il a été altéré (ex: on a forcé paused: true), on le renvoie à tout le monde.
+    const target = isEcho ? socket.to(room.id) : io.to(room.id);
+    
+    target.emit("SYNC_ORDER", {
       sessionId,
+      senderId: member.id,
       ts: session.lastUpdate,
       data: enhancedData,
     });

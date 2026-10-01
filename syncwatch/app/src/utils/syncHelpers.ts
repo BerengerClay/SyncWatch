@@ -18,6 +18,7 @@ export interface SyncRule {
   controllable?: boolean;
   ignoreIfKey?: string;
   hijacksPlayer?: boolean;
+  preventsConvergence?: boolean;
   reactions?: Record<string, Record<string, any>>;
 }
 

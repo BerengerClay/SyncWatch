@@ -21,6 +21,10 @@ class CanalPlusPlugin extends BaseSyncPlugin {
     return state;
   }
 
+  showTitle() {
+    return this.aggregatedState?.title || "Canal+";
+  }
+
   getContentTop() {
     return `
       React.createElement('div', { key: 'canal-info', className: 'flex flex-col items-center gap-2 mt-4 text-center px-6' }, [
@@ -34,7 +38,7 @@ class CanalPlusPlugin extends BaseSyncPlugin {
                 WebkitBoxOrient: 'vertical',
                 overflow: 'hidden'
             }
-        }, state?.title || 'Programme Canal+')
+        }, state?.uiTitle || 'Programme Canal+')
       ])
     `;
   }

@@ -70,9 +70,14 @@ export const WatchScreen: React.FC<Props> = ({
     }
   };
 
-  const getStateLabel = (state: Record<string, any> | undefined | null) => {
+  const getStateTitle = (state: Record<string, any> | undefined | null) => {
     if (!state) return null;
-    return state.title || state.name || state.tf1Title || null;
+    return state.uiTitle || state.title || state.name || state.tf1Title || null;
+  };
+
+  const getStateSubtitle = (state: Record<string, any> | undefined | null) => {
+    if (!state) return null;
+    return state.uiSubtitle || null;
   };
 
   const syncedMembers = members.filter((m) => m.sessionId === currentSessionId);
@@ -146,7 +151,7 @@ export const WatchScreen: React.FC<Props> = ({
                   <button
                     key={m.id}
                     onClick={() => setSelectedMember(m)}
-                    title={`${m.name} : ${getStateLabel(m.state) || "En navigation"} ${isWithMe ? "(Avec vous)" : "(Cliquer pour voir)"}`}
+                    title={`${m.name} : ${getStateTitle(m.state) || "En navigation"}${getStateSubtitle(m.state) ? ` - ${getStateSubtitle(m.state)}` : ""} ${isWithMe ? "(Avec vous)" : "(Cliquer pour voir)"}`}
                     className={`w-5 h-5 rounded-full border border-[#020617] flex items-center justify-center text-[8px] font-black uppercase overflow-hidden transition-all duration-300 hover:scale-125 cursor-pointer ${
                       isWithMe ?
                         "ring-1 ring-emerald-400/80 shadow-[0_0_8px_rgba(52,211,153,0.3)]"
@@ -201,13 +206,13 @@ export const WatchScreen: React.FC<Props> = ({
                 key={m.id}
                 onClick={() => handleJoinFriend(m)}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 hover:bg-emerald-500/20 text-slate-300 hover:text-emerald-300 border border-white/10 hover:border-emerald-500/30 text-[9px] font-medium transition-all shrink-0 active:scale-95 cursor-pointer"
-                title={`Rejoindre ${m.name} (${getStateLabel(m.state) || "Vidéo"})`}
+                title={`Rejoindre ${m.name} (${getStateTitle(m.state) || "Vidéo"})`}
               >
                 <UserPlus size={10} className="text-emerald-400" />
                 <span className="truncate max-w-[130px]">
                   Rejoindre {m.name}{" "}
-                  {getStateLabel(m.state) ?
-                    `· ${getStateLabel(m.state)}`
+                  {getStateTitle(m.state) ?
+                    `· ${getStateTitle(m.state)}`
                   : ""}
                 </span>
               </button>
@@ -221,7 +226,7 @@ export const WatchScreen: React.FC<Props> = ({
         <div className="flex items-center gap-2 min-w-0 overflow-hidden">
           <Tv size={13} className="text-indigo-400 shrink-0" />
           <span className="text-[10px] font-semibold text-slate-400 truncate">
-            {getStateLabel(pluginState) ||
+            {getStateTitle(pluginState) ||
               getDisplayDomain(currentLocalUrl || activeUrl) ||
               "En direct"}
           </span>
@@ -278,10 +283,17 @@ export const WatchScreen: React.FC<Props> = ({
               <div className="text-[10px] uppercase font-bold text-slate-500">
                 Actuellement :
               </div>
-              <div className="p-2 bg-white/5 rounded-lg text-slate-200 truncate font-medium text-[11px]">
-                {getStateLabel(selectedMember.state) ||
-                  selectedMember.activeUrl ||
-                  "En navigation libre"}
+              <div className="p-2 bg-white/5 rounded-lg flex flex-col gap-1 overflow-hidden">
+                <span className="text-slate-200 truncate font-medium text-[11px]">
+                  {getStateTitle(selectedMember.state) ||
+                    selectedMember.activeUrl ||
+                    "En navigation libre"}
+                </span>
+                {getStateSubtitle(selectedMember.state) && (
+                  <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider truncate">
+                    {getStateSubtitle(selectedMember.state)}
+                  </span>
+                )}
               </div>
               <div className="text-[10px] text-slate-400">
                 Statut :{" "}

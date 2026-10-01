@@ -34,6 +34,10 @@ class TF1Plugin extends BaseSyncPlugin {
     return state;
   }
 
+  showTitle() {
+    return this.aggregatedState?.tf1Title || "TF1+";
+  }
+
   getContentTop() {
     return `React.createElement('div', { className: 'flex flex-col items-center gap-4 w-full relative' }, [
          // --- ALERTE PUBLICITÉ ---
@@ -47,7 +51,7 @@ class TF1Plugin extends BaseSyncPlugin {
             key: 'tf1-title', // 🔥 AJOUT DE LA KEY
             className: 'text-center font-bold text-white tracking-tight leading-tight ' + (state?.isAd ? 'opacity-50' : ''),
             style: { fontSize: 'clamp(1.5rem, 6vw, 1.8rem)', display: '-webkit-box', WebkitLineClamp: '3', WebkitBoxOrient: 'vertical', overflow: 'hidden' }
-        }, state?.tf1Title || 'Chargement...'),
+        }, state?.uiTitle || 'Chargement...'),
     ])`;
   }
 }

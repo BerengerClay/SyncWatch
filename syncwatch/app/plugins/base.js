@@ -18,6 +18,12 @@ class BaseSyncPlugin extends SyncWatchCore {
   getCustomState() {
     return {};
   }
+  showTitle() {
+    return this.aggregatedState?.title || this.scrapeTopData()?.title || "Vidéo";
+  }
+  showSubtitle() {
+    return null;
+  }
   getContainerClasses() {
     return "bg-slate-900/40 border-white/5 shadow-2xl";
   }
@@ -37,9 +43,9 @@ class BaseSyncPlugin extends SyncWatchCore {
   // --- 📏 RÈGLES DE SYNCHRO (Vraiment Agnostique V2) ---
   getSyncRules() {
     return {
-      "paused": { type: "DISCRETE" },
-      "playbackRate": { type: "DISCRETE" },
-      "time": {
+      paused: { type: "DISCRETE" },
+      playbackRate: { type: "DISCRETE" },
+      time: {
         type: "CONTINUOUS",
         driftThreshold: 2.0,
         speedKey: "playbackRate",
@@ -48,20 +54,22 @@ class BaseSyncPlugin extends SyncWatchCore {
         blockingIfKey: "seeking",
         ignoreIfKey: "isAd",
       },
-      "seeking": { type: "IGNORED" },
-      "duration": { type: "IGNORED" },
-      "readyState": { type: "IGNORED" },
-      "activeUrl": { type: "IGNORED" },
-      "isAd": {
+      seeking: { type: "IGNORED" },
+      duration: { type: "IGNORED" },
+      isBuffering: { type: "IGNORED", preventsConvergence: true },
+      activeUrl: { type: "IGNORED" },
+      isAd: {
         type: "DISCRETE",
         collective: true,
         controllable: false,
         hijacksPlayer: true,
         reactions: {
-          true: { "paused": true },
-          false: { "paused": false },
+          true: { paused: true },
+          false: { paused: false },
         },
       },
+      uiTitle: { type: "DISCRETE", controllable: false },
+      uiSubtitle: { type: "DISCRETE", controllable: false },
     };
   }
 
@@ -116,9 +124,9 @@ class BaseSyncPlugin extends SyncWatchCore {
     if (!v) return null;
     return {
       time: v.currentTime,
-      paused: v.paused || v.readyState < 3,
+      paused: this._forcePause ? true : v.paused,
       seeking: v.seeking, // 🟢 NOTRE VIGILE
-      readyState: v.readyState || 0, // 📡 VIGILE DE CHARGEMENT
+      isBuffering: v.readyState < 3, // 📡 VIGILE DE CHARGEMENT
       duration: v.duration || 0,
       playbackRate: v.playbackRate || 1.0,
     };
@@ -128,13 +136,33 @@ class BaseSyncPlugin extends SyncWatchCore {
     const v = this.getVideo();
     if (!v || !s) return;
 
-    // 🗑️ SUPPRIMÉ : Le isApplyingState = true et le setTimeout de 500ms !
-    // Le plugin fait juste son boulot mécaniquement :
     if (s.time !== undefined) {
       v.currentTime = s.time;
     }
-    if (s.paused !== undefined && v.paused !== s.paused) {
-      s.paused ? v.pause() : v.play().catch(() => {});
+    if (s.paused !== undefined) {
+      if (s.paused) {
+        v.pause();
+
+        // Drapeau Anti-Autoplay : masque les rebellions des SPA au SyncEngine pendant 3s
+        this._forcePause = true;
+        clearTimeout(this._forcePauseTimer);
+        this._forcePauseTimer = setTimeout(() => { this._forcePause = false; }, 3000);
+
+        // Bouclier Tactique : remet physiquement pause pendant 3s (UX, évite le sursaut sonore)
+        if (this._baseAutoplayShield) clearInterval(this._baseAutoplayShield);
+        let shieldLife = 30;
+        this._baseAutoplayShield = setInterval(() => {
+          if (!v.paused) v.pause();
+          if (--shieldLife <= 0) clearInterval(this._baseAutoplayShield);
+        }, 100);
+
+      } else {
+        // Un vrai ordre Play annule immédiatement le drapeau
+        this._forcePause = false;
+        clearTimeout(this._forcePauseTimer);
+        if (this._baseAutoplayShield) clearInterval(this._baseAutoplayShield);
+        v.play().catch(() => {});
+      }
     }
     if (s.playbackRate !== undefined && v.playbackRate !== s.playbackRate) {
       v.playbackRate = s.playbackRate;
@@ -162,6 +190,8 @@ class BaseSyncPlugin extends SyncWatchCore {
             ...(this.getBaseState() || {}),
             ...this.scrapeTopData(),
             ...this.getCustomState(),
+            uiTitle: this.showTitle(),
+            uiSubtitle: this.showSubtitle(),
           },
           activeUrl: this.getCurrentUrl(),
           rules: this.getSyncRules(),
@@ -196,10 +226,19 @@ class BaseSyncPlugin extends SyncWatchCore {
 
     this.listenToApp((cmd, data) => {
       if (cmd === "APPLY_STATE" && data.state) {
-        // 🛡️ DOUBLE SÉCURITÉ : Le plugin refuse de bouger s'il sait qu'il y a une pub
-        if (this.getCustomState().isAd) {
-          console.log("[%s] 🛡️ Plugin Sanctuary: Ignoring sync order during ad.", this.name);
-          return;
+        // Moteur Agnostique: Vérifie si un état local "hijacksPlayer" est actif
+        const localState = this.getCustomState();
+        const rules = this.getSyncRules();
+        
+        for (const [key, val] of Object.entries(localState)) {
+          if (val && rules[key]?.hijacksPlayer) {
+            console.log(
+              "[%s] 🛡️ Plugin Sanctuary: Ignoring sync order by rule (%s hijacks player).",
+              this.name,
+              key
+            );
+            return;
+          }
         }
 
         this.aggregatedState = {
@@ -238,9 +277,9 @@ class BaseSyncPlugin extends SyncWatchCore {
           state: {
             ...(this.getBaseState() || {}),
             ...this.getCustomState(),
-          }
+          },
         },
-        "*"
+        "*",
       );
     };
 
