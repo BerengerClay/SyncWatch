@@ -1,5 +1,13 @@
 /**
- * SyncWatch - BaseSyncPlugin V12 (Pure State Machine / No Blind Timeout)
+ * ---------------------------------------------------------------------------
+ * SyncWatch - BaseSyncPlugin V12 (L'Espion Infiltré)
+ * ---------------------------------------------------------------------------
+ * Ce script est injecté directement dans la page web de la vidéo (ex: dans l'onglet YouTube).
+ * Rôles :
+ * 1. Trouver la balise `<video>` dans le code HTML.
+ * 2. Écouter les événements "play", "pause", "seek" de la vidéo.
+ * 3. Transmettre ces événements à Tauri via la fonction `sendReportToApp` (Core).
+ * 4. Recevoir les ordres de Tauri (ex: "Mets sur pause") et forcer la balise `<video>` à obéir.
  */
 class BaseSyncPlugin extends SyncWatchCore {
   constructor() {
@@ -40,7 +48,15 @@ class BaseSyncPlugin extends SyncWatchCore {
     return "null";
   }
 
-  // --- 📏 RÈGLES DE SYNCHRO (Vraiment Agnostique V2) ---
+  // =========================================================================
+  // 📏 RÈGLES DE SYNCHRO (Le Manuel d'Instructions pour SyncEngine)
+  // =========================================================================
+  // Définit comment le SyncEngine (côté React) doit interpréter chaque variable :
+  // - DISCRETE : Ne s'envoie que si la valeur change strictement (ex: paused true -> false).
+  // - CONTINUOUS : Variable qui évolue toute seule (ex: le temps). Le moteur calcule la dérive (drift)
+  //   et ne synchronise que si l'écart dépasse `driftThreshold`.
+  // - IGNORED : On regarde la variable, mais on ne la synchronise pas (ex: isBuffering).
+  // - hijacksPlayer : Si activé (ex: `isAd: true`), bloque les ordres de lecture des autres utilisateurs.
   getSyncRules() {
     return {
       paused: { type: "DISCRETE" },

@@ -2,6 +2,17 @@ import React from 'react';
 import { Tv, Crown, MessageSquare, Settings, Share2, UserPlus } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
+/**
+ * ---------------------------------------------------------------------------
+ * GroupDashboard.tsx : Le Lobby du Salon (Hub principal)
+ * ---------------------------------------------------------------------------
+ * Rôles :
+ * 1. Afficher les amis présents dans le salon.
+ * 2. Lister les vidéos actuellement regardées par les autres (les "streams actifs") pour les rejoindre.
+ * 3. Lancer une nouvelle vidéo (via un lien direct ou en ouvrant un plugin comme YouTube/Netflix).
+ * 
+ * Note : Cet écran s'affiche quand l'utilisateur ne regarde aucune vidéo (ou qu'il a cliqué sur "Stop").
+ */
 interface Props {
   roomId: string;
   isHost: boolean;

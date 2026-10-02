@@ -16,6 +16,18 @@ import { MemberInfo } from "../types/sync";
 // Indispensable pour que les plugins puissent utiliser React.createElement
 (window as any).React = React;
 
+/**
+ * ---------------------------------------------------------------------------
+ * WatchScreen.tsx : L'Écran de Visionnage (Salle de cinéma)
+ * ---------------------------------------------------------------------------
+ * Rôles :
+ * 1. Affiche l'UI autour du lecteur vidéo (boutons Quitter, liste des avatars, popup d'information).
+ * 2. Rend conditionnellement l'UI du plugin (ex: le panneau latéral YouTube, si le plugin l'exige).
+ * 3. Héberge le composant invisible `SyncEngine` qui gère toute la logique de synchronisation en arrière-plan.
+ * 
+ * Note : La vidéo elle-même n'est pas rendue ici. Elle est affichée par Tauri (le Webview) 
+ * superposé au-dessus de cette interface React.
+ */
 interface Props {
   roomId: string;
   isHost: boolean;

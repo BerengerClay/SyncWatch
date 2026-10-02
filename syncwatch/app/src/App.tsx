@@ -5,6 +5,17 @@ import { WatchScreen } from "./components/WatchScreen";
 import { socket, listenToServer } from "./services/socket";
 import { invoke } from "@tauri-apps/api/core";
 
+/**
+ * ---------------------------------------------------------------------------
+ * App.tsx : Le Cœur de l'Interface React (Routeur & Gestion d'État Global)
+ * ---------------------------------------------------------------------------
+ * Rôles :
+ * 1. Gère la navigation entre 3 écrans : HOME (Accueil), GROUP (Lobby/Dashboard), WATCH (Lecteur vidéo).
+ * 2. Maintient la vérité absolue de la liste des `members` (spectateurs dans le salon).
+ * 3. Écoute le serveur Socket.io pour mettre à jour l'UI globale.
+ * 4. Communique avec le backend Rust/Tauri (via `invoke("set_view_mode")`) pour afficher/cacher le navigateur web intégré.
+ */
+
 type AppState = "HOME" | "GROUP" | "WATCH";
 
 function App() {
@@ -64,6 +75,13 @@ function App() {
           currentSessionIdRef.current = payload.sessionId;
         }
       } else if (payload.type === "MEMBERS_UPDATE") {
+        // =========================================================================
+        // CACHE INTELLIGENT DE PRÉSENCE (MEMBERS_UPDATE)
+        // =========================================================================
+        // Le serveur envoie la liste des membres, mais pour économiser de la data,
+        // il omet délibérément l'état (titre, pause, etc.) de chaque vidéo.
+        // On fusionne donc intelligemment les nouvelles infos (présence/URL)
+        // avec ce que React connaissait déjà (l'ancien état de la vidéo).
         if (payload.members) {
           setMembers((prev) => {
             return payload.members.map((newMember: any) => {
@@ -72,13 +90,18 @@ function App() {
                 ...newMember,
                 activeUrl: newMember.activeUrl !== undefined ? newMember.activeUrl : oldMember?.activeUrl,
                 state: newMember.activeUrl === null 
-                  ? {} 
+                  ? {} // Si l'utilisateur retourne au lobby, on vide son état
                   : (newMember.state !== undefined ? newMember.state : oldMember?.state),
               };
             });
           });
         }
       } else if (payload.type === "SYNC_ORDER") {
+        // =========================================================================
+        // SURVEILLANCE GLOBALE DES SESSIONS (SYNC_ORDER)
+        // =========================================================================
+        // Même si on est dans le Lobby, on écoute les événements de synchronisation
+        // des AUTRES membres pour mettre à jour leur statut en temps réel (ex: "En pause", "Titre vidéo").
         const s = payload.data || payload;
         const orderSessionId = payload.sessionId;
         const senderId = payload.senderId;

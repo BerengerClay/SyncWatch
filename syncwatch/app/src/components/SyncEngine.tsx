@@ -25,13 +25,13 @@ interface SyncEngineProps {
 
 /**
  * SyncEngine : Le Cœur Réseau & Synchronisation (Le chef d'orchestre)
- * 
+ *
  * Rôle principal :
  * 1. Écouter le lecteur webview (via Tauri) pour détecter les actions locales de l'utilisateur.
  * 2. Écouter le serveur (via Socket.io) pour recevoir les actions des autres utilisateurs.
- * 3. Gérer la "Convergence Optimiste" : quand on reçoit un ordre réseau (ex: Pause), 
+ * 3. Gérer la "Convergence Optimiste" : quand on reçoit un ordre réseau (ex: Pause),
  *    on ignore temporairement nos propres événements locaux pour éviter de boucler à l'infini (effet d'écho).
- * 
+ *
  * Ce composant n'affiche aucune UI (il retourne `null`), c'est un pur moteur logique "en arrière-plan".
  */
 export const SyncEngine: React.FC<SyncEngineProps> = ({
@@ -104,7 +104,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       initialRoomState.rules
     : null,
   );
-  
+
   // `lastStateRef` : Le dernier état stable validé par le système. Sert de base de comparaison pour envoyer la différence (diff).
   const lastStateRef = useRef<any>(
     initialRoomState?.state ? structuredClone(initialRoomState.state) : null,
@@ -196,7 +196,6 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       ) {
         if (isSameMedia(currentLocalUrl, currentMediaUrlRef.current)) {
           hasReceivedFirstMediaUpdateRef.current = true;
-          expectedStateRef.current.initTs = Date.now();
         } else {
           // L'URL n'est pas encore la bonne, on attend la redirection.
           return;
@@ -231,7 +230,6 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
 
               const {
                 lastShot: _ls,
-                initTs: _it,
                 ts: _ts,
                 ...fullExpected
               } = expectedStateRef.current as any;
@@ -318,17 +316,18 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
 
         if (isPlayerHijacked) {
           // 🛡️ Pause le timer de convergence tant que le lecteur est hijacké (ex: pub)
-          expected.initTs = Date.now();
+          // expected.initTs = Date.now(); (removed)
         } else if (actual !== null) {
           if (rulesRef.current && Object.keys(rulesRef.current).length > 0) {
             const nowTs = Date.now();
             let isMissionAccomplished = true;
             const divergentKeys = new Set<string>();
-            const isTargetPlaying =
-              expected.paused !== undefined ? !expected.paused : !actual.paused;
+            // On pré-calcule dynamiquement l'état "actif" pour les règles continues
+            // au lieu d'utiliser des mots-clés hardcodés comme "paused"
 
             console.log(
-              "[SyncEngine-DEBUG] Evaluating isMissionAccomplished. expected:",              expected,
+              "[SyncEngine-DEBUG] Evaluating isMissionAccomplished. expected:",
+              expected,
               "actual:",
               actual,
             );
@@ -350,8 +349,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
             }
 
             for (const key in expected) {
-              if (key === "ts" || key === "lastShot" || key === "initTs")
-                continue;
+              if (key === "ts" || key === "lastShot") continue;
               const expectedVal = expected[key];
               if (expectedVal === undefined) continue;
 
@@ -390,19 +388,36 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
                   0,
                   (nowTs - (expected.ts || nowTs)) / 1000,
                 );
+                const activeKey = rule.activeIfKey;
+                const isActiveTarget =
+                  activeKey ?
+                    expected[activeKey] !== undefined ?
+                      !!expected[activeKey]
+                    : !!actual[activeKey]
+                  : true;
+                const isTargetPlayingForCalc =
+                  rule.activeInverted ? !isActiveTarget : isActiveTarget;
+
+                const speedKey = rule.speedKey;
                 const speed =
-                  actual.playbackRate || expected.playbackRate || 1.0;
+                  speedKey ?
+                    actual[speedKey] !== undefined ?
+                      actual[speedKey]
+                    : expected[speedKey] || 1.0
+                  : 1.0;
+
                 const targetTime =
-                  isTargetPlaying ?
+                  isTargetPlayingForCalc ?
                     expectedVal + elapsed * speed
                   : expectedVal;
 
                 console.log(
-                  `[SyncEngine-DEBUG] Time calculation for ${key}: nowTs=${nowTs}, expected.ts=${expected.ts}, elapsed=${elapsed.toFixed(3)}s, speed=${speed}, isTargetPlaying=${isTargetPlaying}, expectedVal=${expectedVal}, targetTime=${targetTime.toFixed(3)}, actualVal=${actualVal.toFixed(3)}`,
+                  `[SyncEngine-DEBUG] Time calculation for ${key}: nowTs=${nowTs}, expected.ts=${expected.ts}, elapsed=${elapsed.toFixed(3)}s, speed=${speed}, isTargetPlaying=${isTargetPlayingForCalc}, expectedVal=${expectedVal}, targetTime=${targetTime.toFixed(3)}, actualVal=${actualVal.toFixed(3)}`,
                 );
 
                 // Tolérance dynamique: souple en lecture (absorbe le réseau), stricte en pause (précision absolue)
-                const driftThreshold = isTargetPlaying ? (rule?.driftThreshold || 1.2) : 0.05;
+                const driftThreshold =
+                  isTargetPlayingForCalc ? rule?.driftThreshold || 1.2 : 0.05;
 
                 if (Math.abs(targetTime - actualVal) > driftThreshold) {
                   console.log(
@@ -411,10 +426,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
                   isMissionAccomplished = false;
                   divergentKeys.add(key);
                 }
-              } else if (
-                actualVal === undefined ||
-                expectedVal !== actualVal
-              ) {
+              } else if (actualVal === undefined || expectedVal !== actualVal) {
                 console.log(
                   `[SyncEngine-DEBUG] isMissionAccomplished=false because ${key} expected (${expectedVal}) !== actual (${actualVal})`,
                 );
@@ -435,19 +447,39 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
               if (!expected.lastShot || nowTs - expected.lastShot > 1000) {
                 const stateOrder: any = {};
                 for (const key of divergentKeys) {
-                  if (key === "time" && isTargetPlaying) {
-                    const elapsed = Math.max(
-                      0,
-                      (nowTs - (expected.ts || nowTs)) / 1000,
-                    );
-                    const speed =
-                      actual.playbackRate || expected.playbackRate || 1.0;
-                    stateOrder[key] = expected[key] + elapsed * speed;
+                  const rule = rulesRef.current?.[key];
+                  if (rule?.type === "CONTINUOUS") {
+                    const activeKey = rule.activeIfKey;
+                    const isActiveTarget =
+                      activeKey ?
+                        expected[activeKey] !== undefined ?
+                          !!expected[activeKey]
+                        : !!actual[activeKey]
+                      : true;
+                    const isTargetPlaying =
+                      rule.activeInverted ? !isActiveTarget : isActiveTarget;
+
+                    if (isTargetPlaying) {
+                      const elapsed = Math.max(
+                        0,
+                        (nowTs - (expected.ts || nowTs)) / 1000,
+                      );
+                      const speedKey = rule.speedKey;
+                      const speed =
+                        speedKey ?
+                          actual[speedKey] !== undefined ?
+                            actual[speedKey]
+                          : expected[speedKey] || 1.0
+                        : 1.0;
+                      stateOrder[key] = expected[key] + elapsed * speed;
+                    } else {
+                      stateOrder[key] = expected[key];
+                    }
                   } else {
                     stateOrder[key] = expected[key];
                   }
                 }
-                
+
                 if (Object.keys(stateOrder).length > 0) {
                   console.log(
                     "[SyncEngine-DEBUG] Resending APPLY_STATE (only divergent keys):",
@@ -491,7 +523,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
         stateForDiff = stateToDiff;
       }
 
-      // Utilisation d'un algorithme intelligent pour ne détecter et n'envoyer 
+      // Utilisation d'un algorithme intelligent pour ne détecter et n'envoyer
       // QUE les changements réels (ex: si seul "paused" passe de false à true).
       // Ça réduit massivement la bande passante et l'effet "spam".
       const patch = getIncrementalDiff(
@@ -570,10 +602,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       if (packet.type === "JOIN_SUCCESS") {
         patch = packet.initialState;
         if (packet.members) onMembersUpdateRef.current?.(packet.members);
-      } else if (
-        packet.type === "SYNC_ORDER" ||
-        packet.type === "SYNC_STATE_PATCH"
-      ) {
+      } else if (packet.type === "SYNC_ORDER") {
         if (
           packet.sessionId &&
           currentSessionIdRef.current &&
@@ -618,7 +647,6 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
           expectedStateRef.current = {
             ...(expectedStateRef.current || {}),
             ...patch.state,
-            initTs: Date.now(),
             ts: Date.now(),
           };
 

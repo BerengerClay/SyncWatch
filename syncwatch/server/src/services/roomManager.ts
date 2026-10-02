@@ -9,11 +9,12 @@ const rooms: Map<string, Room> = new Map();
 
 export const getAllRooms = (): Room[] => Array.from(rooms.values());
 
-export const getRoomById = (roomId: string): Room | undefined => rooms.get(roomId);
+export const getRoomById = (roomId: string): Room | undefined =>
+  rooms.get(roomId);
 
 export const getRoomBySocket = (
   socketId: string,
-  socketRooms: Iterable<string>
+  socketRooms: Iterable<string>,
 ): Room | null => {
   for (const rId of socketRooms) {
     if (rId !== socketId) {
@@ -27,7 +28,10 @@ export const getRoomBySocket = (
 const generateSessionId = (socketId: string): string =>
   `${socketId.substring(0, 6)}_${Date.now().toString(36)}`;
 
-const createEmptySession = (id: string, rules?: Record<string, SyncRule>): WatchSession => ({
+const createEmptySession = (
+  id: string,
+  rules?: Record<string, SyncRule>,
+): WatchSession => ({
   id,
   activeUrl: null,
   activePluginId: null,
@@ -37,34 +41,60 @@ const createEmptySession = (id: string, rules?: Record<string, SyncRule>): Watch
 });
 
 /**
+ * Assigne un membre à une nouvelle session fraîchement générée
+ * Gère la création, le lien bidirectionnel et l'ajout dans le salon.
+ */
+const assignMemberToNewSession = (
+  room: Room,
+  member: MemberPresence,
+  opts: {
+    activeUrl?: string | null;
+    activePluginId?: string | null;
+    state?: Record<string, any>;
+    rules?: Record<string, SyncRule>;
+  } = {}
+): string => {
+  const sessionId = generateSessionId(member.id);
+  const session = createEmptySession(sessionId, opts.rules);
+  
+  session.activeUrl = opts.activeUrl || null;
+  session.activePluginId = opts.activePluginId || null;
+  session.state = opts.state || {};
+  
+  room.sessions[sessionId] = session;
+
+  member.sessionId = sessionId;
+  member.activeUrl = session.activeUrl;
+  member.state = { ...session.state };
+
+  return sessionId;
+};
+
+/**
  * 1. Création d'un nouveau salon avec une session initiale
  */
 export const createRoom = (
   socketId: string,
-  userName: string
+  userName: string,
 ): { room: Room; hostSessionId: string } => {
   const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-  const hostSessionId = generateSessionId(socketId);
-
-  const initialSession = createEmptySession(hostSessionId);
 
   const room: Room = {
     id: roomId,
     hostId: socketId,
-    defaultSessionId: hostSessionId,
     members: [
       {
         id: socketId,
         name: userName || "Host",
-        sessionId: hostSessionId,
+        sessionId: "",
         activeUrl: null,
         state: {},
       },
     ],
-    sessions: {
-      [hostSessionId]: initialSession,
-    },
+    sessions: {},
   };
+
+  const hostSessionId = assignMemberToNewSession(room, room.members[0]);
 
   rooms.set(roomId, room);
   console.log(`[ROOM] Created ${roomId} with session ${hostSessionId}`);
@@ -77,24 +107,24 @@ export const createRoom = (
 export const joinRoom = (
   roomId: string,
   socketId: string,
-  userName: string
+  userName: string,
 ): { room: Room; targetSessionId: string } | null => {
   const room = rooms.get(roomId);
   if (!room) return null;
 
-  // Chaque membre commence dans sa propre session vierge dans le lobby
-  const userSessionId = generateSessionId(socketId);
-  room.sessions[userSessionId] = createEmptySession(userSessionId);
-
-  room.members.push({
+  const newMember: MemberPresence = {
     id: socketId,
     name: userName || "Invité",
-    sessionId: userSessionId,
+    sessionId: "",
     activeUrl: null,
     state: {},
-  });
+  };
+  room.members.push(newMember);
 
-  return { room, targetSessionId: userSessionId };
+  // Chaque membre commence dans sa propre session vierge dans le lobby
+  const targetSessionId = assignMemberToNewSession(room, newMember);
+
+  return { room, targetSessionId };
 };
 
 /**
@@ -102,17 +132,12 @@ export const joinRoom = (
  */
 export const leaveSessionToLobby = (
   room: Room,
-  socketId: string
+  socketId: string,
 ): { member: MemberPresence; newSessionId: string } | null => {
   const member = room.members.find((m) => m.id === socketId);
   if (!member) return null;
 
-  const newSessionId = generateSessionId(socketId);
-  member.sessionId = newSessionId;
-  member.activeUrl = null;
-  member.state = {};
-
-  room.sessions[newSessionId] = createEmptySession(newSessionId);
+  const newSessionId = assignMemberToNewSession(room, member);
 
   cleanupOrphanSessions(room);
   return { member, newSessionId };
@@ -124,7 +149,7 @@ export const leaveSessionToLobby = (
 export const joinSession = (
   room: Room,
   socketId: string,
-  targetSessionId: string
+  targetSessionId: string,
 ): { member: MemberPresence; session: WatchSession } | null => {
   const targetSession = room.sessions[targetSessionId];
   const member = room.members.find((m) => m.id === socketId);
@@ -138,12 +163,12 @@ export const joinSession = (
 };
 
 /**
- * 4. Diffuse la session d'un membre à tous les autres membres du salon
+ * 4. Diffuse la session d'un membre à tous les autres membres du salon // -> pas utilisé pour l'instant
  */
 export const broadcastSessionToRoom = (
   room: Room,
   senderSocketId: string,
-  requestedSessionId?: string
+  requestedSessionId?: string,
 ): { targetSession: WatchSession; otherMembers: MemberPresence[] } | null => {
   const member = room.members.find((m) => m.id === senderSocketId);
   if (!member) return null;
@@ -152,7 +177,6 @@ export const broadcastSessionToRoom = (
   const targetSession = room.sessions[targetSessionId];
   if (!targetSession) return null;
 
-  room.defaultSessionId = targetSessionId;
   const otherMembers = room.members.filter((m) => m.id !== senderSocketId);
 
   otherMembers.forEach((m) => {
@@ -173,7 +197,7 @@ export const handleVideoNavigation = (
   activeUrl: string,
   activePluginId?: string,
   state?: Record<string, any>,
-  rules?: Record<string, SyncRule>
+  rules?: Record<string, SyncRule>,
 ): { newSessionId: string; oldSessionId: string; isNewSession: boolean } => {
   const currentSession = room.sessions[member.sessionId];
   const prevUrl = member.activeUrl || currentSession?.activeUrl;
@@ -188,13 +212,10 @@ export const handleVideoNavigation = (
   }
 
   const oldSessionId = member.sessionId;
-  const othersInOldSession = room.members.filter(
-    (m) => m.sessionId === oldSessionId && m.id !== member.id
-  );
 
   // Recherche d'une session existante avec le même média
-  const existingSessionId = Object.keys(room.sessions).find(
-    (sId) => isSameMedia(room.sessions[sId].activeUrl, activeUrl)
+  const existingSessionId = Object.keys(room.sessions).find((sId) =>
+    isSameMedia(room.sessions[sId].activeUrl, activeUrl),
   );
 
   let newSessionId: string;
@@ -207,28 +228,16 @@ export const handleVideoNavigation = (
     // On ne met pas à jour l'état du membre ici car il rejoint une session existante (géré par roomHandler)
   } else {
     // Création d'une nouvelle session dédiée à cette nouvelle vidéo
-    newSessionId = generateSessionId(member.id);
-    member.sessionId = newSessionId;
-    member.activeUrl = activeUrl;
-    if (state) member.state = { ...state };
-
-    const newSession = createEmptySession(newSessionId, rules || currentSession?.rules);
-    newSession.activeUrl = activeUrl;
-    newSession.activePluginId = activePluginId || null;
-    newSession.state = state || {};
-
-    room.sessions[newSessionId] = newSession;
+    newSessionId = assignMemberToNewSession(room, member, {
+      activeUrl,
+      activePluginId,
+      state,
+      rules: rules || currentSession?.rules,
+    });
     isNewSession = true;
   }
 
-  // Nettoyage de l'ancienne session si elle est devenue vide
-  if (othersInOldSession.length === 0 && oldSessionId && oldSessionId !== newSessionId) {
-    delete room.sessions[oldSessionId];
-  }
-
-  if (room.defaultSessionId === oldSessionId && !room.sessions[oldSessionId]) {
-    room.defaultSessionId = newSessionId;
-  }
+  cleanupOrphanSessions(room);
 
   return { newSessionId, oldSessionId, isNewSession };
 };
@@ -239,7 +248,7 @@ export const handleVideoNavigation = (
 export const updateSessionState = (
   room: Room,
   sessionId: string,
-  patch: any
+  patch: any,
 ): WatchSession => {
   let session = room.sessions[sessionId];
   if (!session) {
@@ -266,10 +275,6 @@ export const cleanupOrphanSessions = (room: Room): void => {
       delete room.sessions[sId];
     }
   });
-
-  if (!room.sessions[room.defaultSessionId] && room.members.length > 0) {
-    room.defaultSessionId = room.members[0].sessionId;
-  }
 };
 
 /**
@@ -277,7 +282,7 @@ export const cleanupOrphanSessions = (room: Room): void => {
  */
 export const removeMember = (
   socketId: string,
-  socketRooms: Iterable<string>
+  socketRooms: Iterable<string>,
 ): { room: Room; roomDeleted: boolean }[] => {
   const results: { room: Room; roomDeleted: boolean }[] = [];
 

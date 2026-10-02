@@ -44,6 +44,13 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
     });
   });
 
+  // =========================================================================
+  // GESTION OPTIMISÉE DE LA PRÉSENCE (MEMBERS_UPDATE)
+  // =========================================================================
+  // Cette fonction formate la liste des membres pour le réseau.
+  // CRITIQUE : Par défaut (`includeState: false`), elle NE renvoie PAS l'état (titre, pause)
+  // pour éviter d'inonder le réseau avec des paquets géants à chaque micro-changement.
+  // Le client gardera en cache son propre état local.
   const getUIMembers = (room: Room, includeState: boolean) => {
     return room.members.map((m) => {
       const state = m.state || {};
@@ -66,9 +73,9 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
    * Diffuse les changements de présence et de structure du salon
    * (Arrivée, Départ, Changement de session)
    */
-  const broadcastMembers = (room: Room) => {
+  const broadcastMembers = (room: Room, includeState = false) => {
     io.to(room.id).emit("MEMBERS_UPDATE", {
-      members: getUIMembers(room, false),
+      members: getUIMembers(room, includeState),
     });
     monitor.logMessage({
       socketId: "server",
@@ -96,8 +103,6 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
       sessionId: hostSessionId,
       members: getUIMembers(room, true),
     });
-
-    broadcastMembers(room);
   });
 
   // =========================================================================
@@ -210,31 +215,13 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
   });
 
   // =========================================================================
-  // 5. DEMANDE DE SYNCHRO FRAÎCHE (Rattrapage volontaire)
-  // =========================================================================
-  socket.on("REQUEST_SYNC", (payload?: { sessionId?: string }) => {
-    const room = getRoom();
-    if (!room) return;
-
-    const member = room.members.find((m) => m.id === socket.id);
-    const sessionId = payload?.sessionId || member?.sessionId || room.defaultSessionId;
-    const targetSession = room.sessions[sessionId];
-    if (!targetSession) return;
-
-    const { state, ts } = extrapolateSession(targetSession);
-    socket.emit("SYNC_ORDER", {
-      sessionId,
-      ts,
-      data: {
-        ...state,
-        activeUrl: targetSession.activeUrl,
-      },
-    });
-  });
-
-  // =========================================================================
   // 6. TRANSMISSION D'ACTIONS DANS UNE SESSION (Play, Pause, Seek, Video)
   // =========================================================================
+  // C'est l'autoroute principale de l'application. Dès qu'un client bouge sa vidéo,
+  // il envoie "SEND_ACTION". Le serveur :
+  // 1. Vérifie la session et met à jour l'état serveur.
+  // 2. Gère les "réactions collectives" (ex: "si je vois une pub, mets en pause les copains").
+  // 3. Diffuse le "SYNC_ORDER" aux autres membres pour qu'ils s'alignent.
   socket.on("SEND_ACTION", (packet: SendActionPacket) => {
     const room = getRoom();
     if (!room || !packet.data) return;
@@ -291,18 +278,7 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
           },
         });
         
-        // On notifie les autres membres du salon que cet utilisateur a rejoint la session
-        socket.to(room.id).emit("SYNC_ORDER", {
-          sessionId: navResult.newSessionId,
-          senderId: member.id,
-          ts,
-          data: {
-            activeUrl: existingSession.activeUrl,
-            state: existingSession.state,
-          },
-        });
-        
-        broadcastMembers(room);
+        broadcastMembers(room, true);
         return; // Fin du traitement: on n'applique pas leur action!
       }
     }

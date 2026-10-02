@@ -39,7 +39,6 @@ export interface WatchSession {
 export interface Room {
   id: string;
   hostId: string;
-  defaultSessionId: string;
   members: MemberPresence[];
   sessions: Record<string, WatchSession>;
 }
