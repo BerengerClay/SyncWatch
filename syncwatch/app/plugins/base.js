@@ -20,14 +20,12 @@ class BaseSyncPlugin extends SyncWatchCore {
   }
 
   // --- 🛠️ HOOKS À SURCHARGER (Dans tf1.js, youtube.js...) ---
-  scrapeTopData() {
-    return {};
-  }
+
   getCustomState() {
     return {};
   }
   showTitle() {
-    return this.aggregatedState?.title || this.scrapeTopData()?.title || "Vidéo";
+    return null;
   }
   showSubtitle() {
     return null;
@@ -162,7 +160,9 @@ class BaseSyncPlugin extends SyncWatchCore {
         // Drapeau Anti-Autoplay : masque les rebellions des SPA au SyncEngine pendant 3s
         this._forcePause = true;
         clearTimeout(this._forcePauseTimer);
-        this._forcePauseTimer = setTimeout(() => { this._forcePause = false; }, 3000);
+        this._forcePauseTimer = setTimeout(() => {
+          this._forcePause = false;
+        }, 3000);
 
         // Bouclier Tactique : remet physiquement pause pendant 3s (UX, évite le sursaut sonore)
         if (this._baseAutoplayShield) clearInterval(this._baseAutoplayShield);
@@ -171,7 +171,6 @@ class BaseSyncPlugin extends SyncWatchCore {
           if (!v.paused) v.pause();
           if (--shieldLife <= 0) clearInterval(this._baseAutoplayShield);
         }, 100);
-
       } else {
         // Un vrai ordre Play annule immédiatement le drapeau
         this._forcePause = false;
@@ -204,7 +203,6 @@ class BaseSyncPlugin extends SyncWatchCore {
           state: {
             ...(this.aggregatedState || {}),
             ...(this.getBaseState() || {}),
-            ...this.scrapeTopData(),
             ...this.getCustomState(),
             uiTitle: this.showTitle(),
             uiSubtitle: this.showSubtitle(),
@@ -245,13 +243,13 @@ class BaseSyncPlugin extends SyncWatchCore {
         // Moteur Agnostique: Vérifie si un état local "hijacksPlayer" est actif
         const localState = this.getCustomState();
         const rules = this.getSyncRules();
-        
+
         for (const [key, val] of Object.entries(localState)) {
           if (val && rules[key]?.hijacksPlayer) {
             console.log(
               "[%s] 🛡️ Plugin Sanctuary: Ignoring sync order by rule (%s hijacks player).",
               this.name,
-              key
+              key,
             );
             return;
           }

@@ -5,20 +5,15 @@ class YouTubePlugin extends BaseSyncPlugin {
   }
 
   getCurrentUrl() {
-    try {
-      const u = new URL(window.location.href);
-      const v = u.searchParams.get("v");
-      if (v) {
-        return `https://www.youtube.com/watch?v=${v}`;
-      }
-      const shorts = u.pathname.match(/\/shorts\/([a-zA-Z0-9_-]+)/);
-      if (shorts) {
-        return `https://www.youtube.com/shorts/${shorts[1]}`;
-      }
-      return `${u.origin}${u.pathname}`;
-    } catch {
-      return window.location.href;
+    const isVideoPage = window.location.href.includes("watch?v=");
+
+    if (this.videoElement && isVideoPage) {
+      this.url = window.location.href;
+      return this.url;
+    } else if (this.videoElement && this.url) {
+      return this.url;
     }
+    return window.location.href;
   }
 
   getSyncRules() {
@@ -90,42 +85,34 @@ class YouTubePlugin extends BaseSyncPlugin {
     return document.querySelector("video.html5-main-video");
   }
 
-  scrapeTopData() {
-    const data = {};
-
-    // Titre de la vidéo (reste dans le DOM même pendant la pub)
-    const titleEl =
-      document.querySelector("h1.ytd-watch-metadata") ||
-      document.querySelector(".ytd-video-primary-info-renderer h1") ||
-      document.querySelector("yt-formatted-string.ytd-video-primary-info-renderer") ||
-      document.querySelector("#title > h1");
-    if (titleEl && titleEl.innerText.trim()) {
-      data.title = titleEl.innerText.trim();
-    }
-
-    // Nom de la chaîne
-    const ownerEl = document.querySelector("#owner-name a") || document.querySelector("#channel-name a") || document.querySelector(".ytd-channel-name a");
-    if (ownerEl && ownerEl.innerText.trim()) {
-      data.owner = ownerEl.innerText.trim();
-    }
-
-    return data;
-  }
-
   showTitle() {
-    const isVideo = window.location.pathname.includes('/watch') || window.location.pathname.includes('/shorts/');
-    if (!isVideo) return undefined;
-
-    const data = this.scrapeTopData();
-    return data.title || undefined;
+    const isVideoPage = window.location.href.includes("watch?v=");
+    if (this.videoElement && isVideoPage) {
+      const titleEl = document.querySelector("h1.ytd-watch-metadata");
+      if (titleEl && titleEl.innerText.trim()) {
+        this.title = titleEl.innerText.trim();
+      }
+      return this.title;
+    } else if (this.videoElement && this.title) {
+      return this.title;
+    }
+    return undefined;
   }
 
   showSubtitle() {
-    const isVideo = window.location.pathname.includes('/watch') || window.location.pathname.includes('/shorts/');
-    if (!isVideo) return undefined;
-
-    const data = this.scrapeTopData();
-    return data.owner || undefined;
+    const isVideoPage = window.location.href.includes("watch?v=");
+    if (this.videoElement && isVideoPage) {
+      const ownerEl = document.querySelector(
+        "ytd-watch-metadata .ytd-channel-name a",
+      );
+      if (ownerEl && ownerEl.innerText.trim()) {
+        this.subtitle = ownerEl.innerText.trim();
+      }
+      return this.subtitle;
+    } else if (this.videoElement && this.subtitle) {
+      return this.subtitle;
+    }
+    return undefined;
   }
 
   // 2. L'ÉTAT SPÉCIFIQUE AU LECTEUR (La Pub)

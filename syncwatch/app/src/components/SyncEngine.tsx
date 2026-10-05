@@ -116,6 +116,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
   const hasReceivedFirstMediaUpdateRef = useRef<boolean>(false);
   // Indique s'il faut envoyer un state complet au prochain diff (ex: après une navigation)
   const needsFullStateOnNextDiffRef = useRef<boolean>(false);
+  const fullStateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const currentMediaUrlRef = useRef<string | null>(
     sessionActiveUrl || initialRoomState?.activeUrl || null,
@@ -130,7 +131,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
       !currentMediaUrlRef.current &&
       !expectedTargetUrlRef.current
     ) {
-      currentMediaUrlRef.current = sessionActiveUrl;
+      expectedTargetUrlRef.current = sessionActiveUrl;
     }
   }, [sessionActiveUrl]);
 
@@ -152,6 +153,16 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
 
       const currentLocalUrl = fullState.activeUrl || null;
       const stateToDiff = fullState.state || {};
+
+      // Si on attend l'arrivée sur une nouvelle URL (ex: après un SYNC_ORDER),
+      // les trames provenant de l'ancienne URL sont des "résidus" à ignorer.
+      const isResidualFrame =
+        expectedTargetUrlRef.current &&
+        !isSameMedia(currentLocalUrl, expectedTargetUrlRef.current);
+
+      if (isResidualFrame) {
+        return; // Ignore complètement cette trame fantôme
+      }
 
       if (fullState.rules && Object.keys(fullState.rules).length > 0) {
         const wasEmpty =
@@ -235,11 +246,34 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
               } = expectedStateRef.current as any;
 
               const stateOrder: any = {};
+              const nowTs = Date.now();
               for (const key in fullExpected) {
                 const rule = rulesRef.current?.[key];
                 if (rule?.type === "IGNORED" || rule?.controllable === false)
                   continue;
-                stateOrder[key] = fullExpected[key];
+
+                if (rule?.type === "CONTINUOUS") {
+                  const activeKey = rule.activeIfKey;
+                  const isActiveTarget =
+                    activeKey ?
+                      fullExpected[activeKey] !== undefined ?
+                        !!fullExpected[activeKey]
+                      : true
+                    : true;
+                  const isTargetPlaying =
+                    rule.activeInverted ? !isActiveTarget : isActiveTarget;
+
+                  if (isTargetPlaying) {
+                    const elapsed = Math.max(0, (nowTs - (expectedStateRef.current.ts || nowTs)) / 1000);
+                    const speedKey = rule.speedKey;
+                    const speed = speedKey ? (fullExpected[speedKey] || 1.0) : 1.0;
+                    stateOrder[key] = fullExpected[key] + elapsed * speed;
+                  } else {
+                    stateOrder[key] = fullExpected[key];
+                  }
+                } else {
+                  stateOrder[key] = fullExpected[key];
+                }
               }
 
               lastStateRef.current = deepMerge(
@@ -274,7 +308,10 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
         // On force le prochain update (dans ~1.5s) à envoyer un state COMPLET.
         // On attend 1.5s pour être certain que la SPA (YouTube) a fini de charger
         // le nouveau DOM et que le plugin reporte bien l'état de la NOUVELLE vidéo.
-        setTimeout(() => {
+        if (fullStateTimeoutRef.current) {
+          clearTimeout(fullStateTimeoutRef.current);
+        }
+        fullStateTimeoutRef.current = setTimeout(() => {
           needsFullStateOnNextDiffRef.current = true;
         }, 1500);
 
@@ -283,6 +320,7 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
           ts: Date.now() + clockOffsetRef.current,
           data: {
             activeUrl: currentLocalUrl,
+            activePluginId: activePluginIdRef.current,
             // ASTUCE: On n'envoie délibérément aucun state ici.
             // Dans une SPA (comme YouTube), l'URL change avant le DOM.
             // Si on envoie le state, on fuite le temps de l'ancienne vidéo
@@ -626,6 +664,22 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
         ) {
           isNavigatingToNewUrl = true;
           expectedTargetUrlRef.current = patch.activeUrl;
+          // Update currentMediaUrlRef to the new target URL so that the bootstrap
+          // guard (lines 192-203) can properly match when the new media loads.
+          // Without this, switching sessions while already in WATCH mode would
+          // leave currentMediaUrlRef pointing to the OLD session's URL (e.g. TF1),
+          // causing the guard to block indefinitely since "youtube.com" ≠ "tf1.fr".
+          currentMediaUrlRef.current = patch.activeUrl;
+          // Reset the first-media-update flag so the bootstrap guard will block
+          // stale player-update events until the new media is loaded.
+          hasReceivedFirstMediaUpdateRef.current = false;
+          // Si on rejoint une nouvelle URL dictée par le serveur (ex: JOIN_SESSION),
+          // on annule l'envoi de l'état complet local (prévu par une navigation précédente).
+          needsFullStateOnNextDiffRef.current = false;
+          if (fullStateTimeoutRef.current) {
+            clearTimeout(fullStateTimeoutRef.current);
+            fullStateTimeoutRef.current = null;
+          }
           if (onNavigateRef.current) {
             onNavigateRef.current(patch.activeUrl);
           }
@@ -674,6 +728,9 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
     // Nettoyage impératif à la destruction du composant
     return () => {
       isMounted = false; // Lève le drapeau anti-fantômes
+      if (fullStateTimeoutRef.current) {
+        clearTimeout(fullStateTimeoutRef.current);
+      }
       unlistenTauri.then((u) => u()); // Coupe le flux Tauri
       unlistenSocket(); // Coupe le flux Serveur
     };

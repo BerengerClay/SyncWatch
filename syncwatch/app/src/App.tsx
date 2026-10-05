@@ -132,7 +132,7 @@ function App() {
 
           if (isMySession && s.activeUrl) {
             setRoomState(s);
-            const plugin = s.activePluginId || "youtube";
+            const plugin = s.activePluginId || null;
             setActivePluginId(plugin);
             setActiveUrl(s.activeUrl);
             invoke("playback_control", {
@@ -169,6 +169,7 @@ function App() {
   }, []);
 
   const handleSelectSource = (targetUrl: string, pluginId: string) => {
+    setRoomState(null);
     setActivePluginId(pluginId);
     setActiveUrl(null);
     invoke("set_view_mode", { mode: "WATCH", url: targetUrl });
@@ -177,7 +178,9 @@ function App() {
 
   const handleStopWatching = () => {
     setState("GROUP");
+    setRoomState(null);
     setActiveUrl(null);
+    setActivePluginId(null);
     invoke("set_view_mode", { mode: "HOME" });
     socket.emit("LEAVE_SESSION");
   };
@@ -186,6 +189,7 @@ function App() {
     setState("HOME");
     setRoomId("");
     setIsHost(false);
+    setRoomState(null);
     setActiveUrl(null);
     setActivePluginId(null);
     setCurrentSessionId(null);
@@ -204,8 +208,6 @@ function App() {
 
   const handleJoinSession = (sessionId: string) => {
     console.log("[SyncWatch] 🎯 Joining session:", sessionId);
-    setCurrentSessionId(sessionId);
-    currentSessionIdRef.current = sessionId;
     socket.emit("JOIN_SESSION", { sessionId });
   };
 

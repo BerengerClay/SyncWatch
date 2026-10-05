@@ -25,7 +25,7 @@ struct PluginConfig {
 }
 
 /// Chargeur de Plugins : Assemble Base + Script Site + Init
-fn get_plugin_script_for_url(url: &str) -> String {
+fn get_universal_plugin_script() -> String {
     let paths_to_try = vec!["plugins", "src-tauri/plugins", "../plugins"];
     let (mut plugins_json, mut core_script, mut base_script, mut root_path) = (None, None, None, None);
 
@@ -56,17 +56,22 @@ fn get_plugin_script_for_url(url: &str) -> String {
     let base = base_script.unwrap();
     let root = root_path.unwrap();
 
+    let mut script = format!("{}\n{}\nlet _sw_matched = false;\n", core, base);
+
     for plugin in plugins {
-        if url.contains(&plugin.url_pattern) {
-            let p_path = format!("{}/{}", root, plugin.script_filename);
-            let p_script = fs::read_to_string(&p_path).unwrap_or_default();
-            // L'ordre est CRITIQUE : Core -> Base -> Plugin -> Initialisation
-            return format!("{}\n{}\n{}\nif(window.SW_PLUGIN) window.SW_PLUGIN.init();", core, base, p_script);
-        }
+        let p_path = format!("{}/{}", root, plugin.script_filename);
+        let p_script = fs::read_to_string(&p_path).unwrap_or_default();
+        
+        script.push_str(&format!(
+            "if (window.location.href.includes(\"{}\")) {{\n  _sw_matched = true;\n  {}\n}}\n", 
+            plugin.url_pattern, 
+            p_script
+        ));
     }
 
-    // Fallback HTML5
-    format!("{}\n{}\nwindow.SW_PLUGIN = new BaseSyncPlugin();\nwindow.SW_PLUGIN.init();", core, base)
+    script.push_str("if (!_sw_matched) { window.SW_PLUGIN = new BaseSyncPlugin(); }\n");
+    script.push_str("if(window.SW_PLUGIN) window.SW_PLUGIN.init();\n");
+    script
 }
 
 // --- COMMANDES TAURI ---
@@ -127,7 +132,7 @@ async fn set_view_mode(app: AppHandle, mode: String, url: Option<String>) -> Res
         "WATCH" => {
             if let Some(target_url) = url {
                 let parsed_url = tauri::WebviewUrl::External(url::Url::parse(&target_url).map_err(|e| e.to_string())?);
-                let full_script = get_plugin_script_for_url(&target_url);
+                let full_script = get_universal_plugin_script();
 
                 if cfg!(target_os = "linux") {
                     if let Some(player_win) = app.get_webview_window("player") {

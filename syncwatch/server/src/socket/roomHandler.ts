@@ -165,6 +165,7 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
       data: {
         ...state,
         activeUrl: session.activeUrl,
+        activePluginId: session.activePluginId,
       },
     });
 
@@ -207,6 +208,7 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
         data: {
           ...state,
           activeUrl: targetSession.activeUrl,
+          activePluginId: targetSession.activePluginId,
         },
       });
     });
@@ -275,6 +277,7 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
           data: {
             ...state,
             activeUrl: existingSession.activeUrl,
+            activePluginId: existingSession.activePluginId,
           },
         });
         

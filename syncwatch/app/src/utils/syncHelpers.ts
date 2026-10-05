@@ -55,40 +55,17 @@ export const deepMerge = (target: any, source: any): any => {
 
 // --- URL & MEDIA COMPARISON HELPERS ---
 
-export const getCanonicalMediaId = (
-  rawUrl: string | null | undefined,
-): string | null => {
-  if (!rawUrl) return null;
-  try {
-    const parsed = new URL(rawUrl);
-
-    // 1. YouTube (watch?v= ou /shorts/ ou youtu.be)
-    if (parsed.hostname.includes("youtube.com")) {
-      const v = parsed.searchParams.get("v");
-      if (v) return `yt:${v}`;
-      const shortsMatch = parsed.pathname.match(/\/shorts\/([a-zA-Z0-9_-]+)/);
-      if (shortsMatch) return `yt:${shortsMatch[1]}`;
-    }
-    if (parsed.hostname === "youtu.be") {
-      const id = parsed.pathname.slice(1).split("?")[0];
-      if (id) return `yt:${id}`;
-    }
-
-    // 2. Cas Général : Origine + Pathname (ignore les query params de tracking comme ?t= ou &utm=)
-    return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");
-  } catch {
-    return rawUrl.trim();
-  }
-};
-
+/**
+ * Vérifie si deux URLs pointent vers le même média.
+ * La canonicalisation (retrait des paramètres volatils) est déléguée aux plugins (ex: getCurrentUrl).
+ * Le moteur client reste ainsi 100% agnostique, tout comme le serveur.
+ */
 export const isSameMedia = (
   urlA: string | null | undefined,
   urlB: string | null | undefined,
 ): boolean => {
-  const idA = getCanonicalMediaId(urlA);
-  const idB = getCanonicalMediaId(urlB);
-  if (!idA || !idB) return false;
-  return idA === idB;
+  if (!urlA || !urlB) return false;
+  return urlA.trim() === urlB.trim();
 };
 
 // --- SYNC CORE LOGIC ---
