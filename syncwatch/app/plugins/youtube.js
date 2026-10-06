@@ -4,13 +4,24 @@ class YouTubePlugin extends BaseSyncPlugin {
     this.name = "YouTube";
   }
 
-  getCurrentUrl() {
-    const isVideoPage = window.location.href.includes("watch?v=");
+  isPlayerActive() {
+    // Le lecteur principal est toujours dans #movie_player.
+    // L'astuce ultime : quand YouTube ferme une vidéo (miniplayer fermé ou navigation),
+    // il vide l'attribut "src" de la balise vidéo.
+    const video = document.querySelector("#movie_player video.html5-main-video");
+    return video !== null && !!video.src && video.src !== "";
+  }
 
-    if (this.videoElement && isVideoPage) {
-      this.url = window.location.href;
-      return this.url;
-    } else if (this.videoElement && this.url) {
+  getCurrentUrl() {
+    if (this.videoElement && this.isPlayerActive()) {
+      // Si on est sur une vraie page vidéo, on met à jour le cache.
+      // Sinon (miniplayer sur l'accueil), on garde l'URL en cache.
+      if (
+        window.location.href.includes("watch?v=") ||
+        window.location.href.includes("/shorts/")
+      ) {
+        this.url = window.location.href;
+      }
       return this.url;
     }
     return window.location.href;
@@ -19,73 +30,93 @@ class YouTubePlugin extends BaseSyncPlugin {
   getSyncRules() {
     return {
       ...super.getSyncRules(),
+      playbackRate: { type: "DISCRETE", ignoreIfKey: "isAd" },
       title: { type: "IGNORED" },
       owner: { type: "IGNORED" },
       adTitle: { type: "IGNORED" },
     };
   }
 
-  // Vérifie si on est devant une pub (Scanner de Shadow DOM exhaustif)
-  isWatchingAd() {
-    // 1. On récupère tous les lecteurs possibles (ceux dans le DOM normal)
-    const players = Array.from(
-      document.querySelectorAll(".html5-video-player"),
+  // Scanner pur du DOM (sans effets de bord)
+  isWatchingAdDOM() {
+    const player = document.getElementById("movie_player");
+    if (!player) return false;
+
+    // YouTube ajoute systématiquement ces classes au lecteur principal
+    if (
+      player.classList.contains("ad-showing") ||
+      player.classList.contains("ad-interrupting")
+    ) {
+      return true;
+    }
+
+    // Fallback au cas où YouTube change ses classes de base (basé sur l'UI de pub)
+    const adElement = player.querySelector(
+      ".ytp-ad-player-overlay, .ytp-ad-badge-label, .ytp-skip-ad-button"
     );
+    return adElement !== null && adElement.offsetWidth > 0;
+  }
 
-    // 2. On ajoute les lecteurs cachés dans les Shadow DOM des ytd-player
-    document.querySelectorAll("ytd-player").forEach((ytp) => {
-      if (ytp.shadowRoot) {
-        const shadowPlayer = ytp.shadowRoot.querySelector(
-          ".html5-video-player",
-        );
-        if (shadowPlayer) players.push(shadowPlayer);
+  // Vérifie si on est devant une pub et applique les effets de bord (Skip, x16)
+  isWatchingAd() {
+    const isAnyAdActive = this.isWatchingAdDOM();
+    const video = document.querySelector("#movie_player video.html5-main-video");
+
+    if (isAnyAdActive && video) {
+      // --- AUTO-SKIP ET ACCÉLÉRATION DE LA PUB ---
+      if (!this._adOriginalRate) {
+        this._adOriginalRate = video.playbackRate;
+        
+        // 🔴 CRITIQUE: Boucle ultra-rapide (50ms) pour surveiller la fin de la pub et skipper.
+        if (this._adFastLoop) clearInterval(this._adFastLoop);
+        this._adFastLoop = setInterval(() => {
+          // 1. Matraquage du bouton Skip dès qu'il apparaît (même avant les 500ms)
+          const skipButtons = document.querySelectorAll(
+            ".ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button, .ytp-ad-skip-button-container"
+          );
+          skipButtons.forEach(b => b.click());
+
+          // 2. Détection de fin de pub
+          if (!this.isWatchingAdDOM() && this._adOriginalRate) {
+            // La pub vient de se terminer ! Restauration immédiate.
+            video.playbackRate = this._adOriginalRate;
+            this._adOriginalRate = null;
+            clearInterval(this._adFastLoop);
+          }
+        }, 50);
       }
-    });
 
-    // Fonction pour vérifier si un élément est réellement visible
-    const isVisible = (el) =>
-      !!(
-        el &&
-        (el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-      );
-
-    // 3. On vérifie si l'un d'entre eux porte la marque de la pub (ET est visible)
-    const isAnyAdActive = players.some((p) => {
-      // Les classes sur le player sont généralement fiables
-      if (
-        p.classList.contains("ad-showing") ||
-        p.classList.contains("ad-interrupting")
-      )
-        return true;
-
-      // Pour les autres, on vérifie la visibilité ou le contenu
-      const overlay = p.querySelector(".ytp-ad-player-overlay");
-      if (isVisible(overlay)) return true;
-
-      const badge = p.querySelector(
-        ".ad-simple-attributed-string, .ytp-ad-badge-label",
-      );
-      if (isVisible(badge) && badge.innerText.trim().length > 0) return true;
-
-      const skip = p.querySelector(".ytp-ad-skip-button, .ytp-skip-ad-button");
-      if (isVisible(skip)) return true;
-
-      const adTitle = p.querySelector(".ytp-title-link");
-      if (isVisible(adTitle) && adTitle.innerText.trim().length > 0)
-        return true;
-
-      return false;
-    });
+      if (video.playbackRate !== 16.0) {
+        video.playbackRate = 16.0;
+      }
+    } 
 
     return isAnyAdActive;
   }
 
+  getBaseState() {
+    const state = super.getBaseState();
+    // Masque la vitesse x16 au moteur de synchronisation pour éviter de polluer les autres utilisateurs
+    // pendant la pub ou lors de la tick de transition où la pub se termine.
+    if (state && this._adOriginalRate) {
+      state.playbackRate = this._adOriginalRate;
+    }
+    return state;
+  }
+
   // Trouve la vidéo locale (Plus robuste)
   findVideoElement() {
-    return document.querySelector("video.html5-main-video");
+    if (!this.isPlayerActive()) return null;
+
+    // #movie_player est le conteneur principal du lecteur, actif à la fois
+    // sur la page /watch et dans le miniplayer.
+    // Cela nous permet d'ignorer les lecteurs fantômes ou d'aperçu (ex: #inline-preview-player).
+    return document.querySelector("#movie_player video.html5-main-video");
   }
 
   showTitle() {
+    if (!this.isPlayerActive()) return null;
+
     const isVideoPage = window.location.href.includes("watch?v=");
     if (this.videoElement && isVideoPage) {
       const titleEl = document.querySelector("h1.ytd-watch-metadata");
@@ -96,10 +127,12 @@ class YouTubePlugin extends BaseSyncPlugin {
     } else if (this.videoElement && this.title) {
       return this.title;
     }
-    return undefined;
+    return null;
   }
 
   showSubtitle() {
+    if (!this.isPlayerActive()) return null;
+
     const isVideoPage = window.location.href.includes("watch?v=");
     if (this.videoElement && isVideoPage) {
       const ownerEl = document.querySelector(
@@ -112,7 +145,7 @@ class YouTubePlugin extends BaseSyncPlugin {
     } else if (this.videoElement && this.subtitle) {
       return this.subtitle;
     }
-    return undefined;
+    return null;
   }
 
   // 2. L'ÉTAT SPÉCIFIQUE AU LECTEUR (La Pub)
@@ -133,8 +166,8 @@ class YouTubePlugin extends BaseSyncPlugin {
             key: 'yt-title',
             className: 'text-center font-bold text-white tracking-tight leading-tight',
             style: { fontSize: 'clamp(1.5rem, 6vw, 1.8rem)', display: '-webkit-box', WebkitLineClamp: '3', WebkitBoxOrient: 'vertical', overflow: 'hidden' }
-        }, state?.uiTitle || 'Chargement...'),
-        state?.uiSubtitle ? React.createElement('h2', {
+        }, state?.isIdle ? 'Navigation...' : (state?.uiTitle || 'Chargement...')),
+        (!state?.isIdle && state?.uiSubtitle) ? React.createElement('h2', {
             key: 'yt-subtitle',
             className: 'text-[11px] font-black text-red-400 uppercase tracking-widest'
         }, state.uiSubtitle) : null,

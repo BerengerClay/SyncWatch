@@ -183,6 +183,9 @@ class BaseSyncPlugin extends SyncWatchCore {
       v.playbackRate = s.playbackRate;
     }
   }
+  isIdle() {
+    return this.getVideo() === null;
+  }
 
   init() {
     if (window.location.href.startsWith("about:")) return;
@@ -204,6 +207,7 @@ class BaseSyncPlugin extends SyncWatchCore {
             ...(this.aggregatedState || {}),
             ...(this.getBaseState() || {}),
             ...this.getCustomState(),
+            isIdle: this.isIdle(),
             uiTitle: this.showTitle(),
             uiSubtitle: this.showSubtitle(),
           },
@@ -390,7 +394,7 @@ class BaseSyncPlugin extends SyncWatchCore {
     return `(props) => {
       const state = props.state || {};
       
-      const isIdle = Object.keys(state).length === 0;
+      const isIdle = state.isIdle !== undefined ? state.isIdle : state.time === undefined;
       const isAd = !!state.isAd;
       const isWatch = !isIdle && !isAd;
 
