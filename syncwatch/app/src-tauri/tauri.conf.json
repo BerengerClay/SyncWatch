@@ -12,7 +12,7 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.tf1.fr https://*.abtasty.com https://*.youtube.com https://s.ytimg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; connect-src 'self' ghost: ws: wss: http://localhost:3001 https://*.tf1.fr https://*.ddl.tf1.fr https://*.braze.eu https://*.datadoghq.com https://*.youtube.com https://*.googlevideo.com https://*.google.com;"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.tf1.fr https://*.abtasty.com https://*.youtube.com https://s.ytimg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; connect-src 'self' ghost: ws: wss: http://localhost:3001 https://livekit.beclay.fr https://*.tf1.fr https://*.ddl.tf1.fr https://*.braze.eu https://*.datadoghq.com https://*.youtube.com https://*.googlevideo.com https://*.google.com;"
     }
   },
   "bundle": {

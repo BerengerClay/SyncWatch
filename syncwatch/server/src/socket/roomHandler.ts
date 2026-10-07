@@ -1,4 +1,5 @@
 import { Server, Socket } from "socket.io";
+import { AccessToken } from "livekit-server-sdk";
 import { Room, SendActionPacket } from "../types/sync.js";
 import {
   createRoom,
@@ -343,6 +344,41 @@ export const setupRoomHandlers = (io: Server, socket: Socket) => {
     });
 
     monitor.broadcastSnapshot(getAllRooms());
+  });
+
+  // =========================================================================
+  // 6b. LIVEKIT TOKEN GENERATION
+  // =========================================================================
+  socket.on("GET_LIVEKIT_TOKEN", async (callback: (token?: string) => void) => {
+    const room = getRoom();
+    const member = room?.members.find((m) => m.id === socket.id);
+    if (!room || !member) {
+      if (callback) callback();
+      return;
+    }
+
+    try {
+      const apiKey = process.env.LIVEKIT_API_KEY || "dev_api_key";
+      const apiSecret = process.env.LIVEKIT_API_SECRET || "dev_api_secret";
+
+      const at = new AccessToken(apiKey, apiSecret, {
+        identity: member.id,
+        name: member.name,
+      });
+
+      at.addGrant({
+        roomJoin: true,
+        room: room.id,
+        canPublish: true,
+        canSubscribe: true,
+      });
+
+      const token = await at.toJwt();
+      if (callback) callback(token);
+    } catch (e) {
+      console.error("[LIVEKIT] Error generating token", e);
+      if (callback) callback();
+    }
   });
 
   // =========================================================================

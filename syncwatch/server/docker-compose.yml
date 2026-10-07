@@ -17,6 +17,26 @@ services:
       # Node.js / Express / Socket.IO écoute sur le port 3001
       - "traefik.http.services.syncwatch-server.loadbalancer.server.port=3001"
 
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: livekit-server
+    restart: always
+    command: --config /etc/livekit.yaml
+    ports:
+      - "7881:7881"       # Fallback TCP
+      - "7882:7882/udp"   # Le port unique UDP (Multiplexing)
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml
+    networks:
+      - web
+    labels:
+      - "traefik.enable=true"
+      # Configuration pour l'API/Signaling (via HTTPS standard)
+      - "traefik.http.routers.livekit.rule=Host(`livekit.beclay.fr`)"
+      - "traefik.http.routers.livekit.entrypoints=websecure"
+      - "traefik.http.routers.livekit.tls.certresolver=le"
+      - "traefik.http.services.livekit.loadbalancer.server.port=7880"
+
 networks:
   web:
     external: true

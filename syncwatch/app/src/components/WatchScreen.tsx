@@ -1,5 +1,6 @@
 import React from "react";
 import { SyncEngine } from "./SyncEngine";
+import { LiveKitSidebar } from "./LiveKitSidebar";
 import {
   Crown,
   LogOut,
@@ -251,20 +252,27 @@ export const WatchScreen: React.FC<Props> = ({
 
       {/* ── MAIN CONTENT (The Dumb Shell) ── */}
       <div className="flex-1 flex flex-col items-center justify-center overflow-hidden">
-        {PluginUI ?
-          <div className="w-full h-full flex flex-col">
-            <PluginUI
-              state={pluginState}
-              sendControl={handleControl}
-            />
-          </div>
-        : <div className="flex flex-col items-center gap-6 opacity-10">
-            <Cpu size={64} className="text-white animate-pulse" />
-            <span className="text-[10px] font-black tracking-[0.5em] uppercase">
-              LINKING...
-            </span>
-          </div>
-        }
+        <div className="flex-1 w-full overflow-hidden flex flex-col items-center justify-center">
+          {PluginUI ?
+            <div className="w-full h-full flex flex-col">
+              <PluginUI
+                state={pluginState}
+                sendControl={handleControl}
+              />
+            </div>
+          : <div className="flex flex-col items-center gap-6 opacity-10">
+              <Cpu size={64} className="text-white animate-pulse" />
+              <span className="text-[10px] font-black tracking-[0.5em] uppercase">
+                LINKING...
+              </span>
+            </div>
+          }
+        </div>
+        
+        {/* ── VISIO LIVEKIT ── */}
+        <div className="h-64 shrink-0 w-full border-t border-white/10">
+          <LiveKitSidebar roomId={roomId} />
+        </div>
       </div>
 
       <SyncEngine
