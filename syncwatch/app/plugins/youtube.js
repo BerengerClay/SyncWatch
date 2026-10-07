@@ -8,7 +8,9 @@ class YouTubePlugin extends BaseSyncPlugin {
     // Le lecteur principal est toujours dans #movie_player.
     // L'astuce ultime : quand YouTube ferme une vidéo (miniplayer fermé ou navigation),
     // il vide l'attribut "src" de la balise vidéo.
-    const video = document.querySelector("#movie_player video.html5-main-video");
+    const video = document.querySelector(
+      "#movie_player video.html5-main-video",
+    );
     return video !== null && !!video.src && video.src !== "";
   }
 
@@ -52,7 +54,7 @@ class YouTubePlugin extends BaseSyncPlugin {
 
     // Fallback au cas où YouTube change ses classes de base (basé sur l'UI de pub)
     const adElement = player.querySelector(
-      ".ytp-ad-player-overlay, .ytp-ad-badge-label, .ytp-skip-ad-button"
+      ".ytp-ad-player-overlay, .ytp-ad-badge-label, .ytp-skip-ad-button",
     );
     return adElement !== null && adElement.offsetWidth > 0;
   }
@@ -60,23 +62,19 @@ class YouTubePlugin extends BaseSyncPlugin {
   // Vérifie si on est devant une pub et applique les effets de bord (Skip, x16)
   isWatchingAd() {
     const isAnyAdActive = this.isWatchingAdDOM();
-    const video = document.querySelector("#movie_player video.html5-main-video");
+    const video = document.querySelector(
+      "#movie_player video.html5-main-video",
+    );
 
     if (isAnyAdActive && video) {
       // --- AUTO-SKIP ET ACCÉLÉRATION DE LA PUB ---
       if (!this._adOriginalRate) {
         this._adOriginalRate = video.playbackRate;
-        
-        // 🔴 CRITIQUE: Boucle ultra-rapide (50ms) pour surveiller la fin de la pub et skipper.
+
+        // 🔴 CRITIQUE: Boucle ultra-rapide (50ms) pour surveiller la fin de la pub.
         if (this._adFastLoop) clearInterval(this._adFastLoop);
         this._adFastLoop = setInterval(() => {
-          // 1. Matraquage du bouton Skip dès qu'il apparaît (même avant les 500ms)
-          const skipButtons = document.querySelectorAll(
-            ".ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button, .ytp-ad-skip-button-container"
-          );
-          skipButtons.forEach(b => b.click());
-
-          // 2. Détection de fin de pub
+          // Détection de fin de pub
           if (!this.isWatchingAdDOM() && this._adOriginalRate) {
             // La pub vient de se terminer ! Restauration immédiate.
             video.playbackRate = this._adOriginalRate;
@@ -89,7 +87,7 @@ class YouTubePlugin extends BaseSyncPlugin {
       if (video.playbackRate !== 16.0) {
         video.playbackRate = 16.0;
       }
-    } 
+    }
 
     return isAnyAdActive;
   }
@@ -166,7 +164,7 @@ class YouTubePlugin extends BaseSyncPlugin {
             key: 'yt-title',
             className: 'text-center font-bold text-white tracking-tight leading-tight',
             style: { fontSize: 'clamp(1.5rem, 6vw, 1.8rem)', display: '-webkit-box', WebkitLineClamp: '3', WebkitBoxOrient: 'vertical', overflow: 'hidden' }
-        }, state?.isIdle ? 'Navigation...' : (state?.uiTitle || 'Chargement...')),
+        }, state?.isIdle ? 'Navigation...' : (state?.uiTitle)),
         (!state?.isIdle && state?.uiSubtitle) ? React.createElement('h2', {
             key: 'yt-subtitle',
             className: 'text-[11px] font-black text-red-400 uppercase tracking-widest'
