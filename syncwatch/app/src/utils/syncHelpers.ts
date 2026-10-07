@@ -174,6 +174,11 @@ export const getIncrementalDiff = (
     }
     // 4. CAS DES VALEURS SIMPLES
     else if (valNew !== valOld) {
+      // Évite d'écraser une métadonnée valide (ex: uiTitle) par un `null` local 
+      // si la page est juste en train de charger.
+      if (valNew === null && rules && rules[path]?.controllable === false) {
+        continue;
+      }
       patch[key] = valNew;
       hasChanged = true;
     }

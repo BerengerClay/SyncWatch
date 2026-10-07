@@ -601,6 +601,12 @@ export const SyncEngine: React.FC<SyncEngineProps> = ({
         finalPatch = {};
         for (const key in stateToDiff) {
           if (rules[key]?.type === "IGNORED") continue;
+          if (
+            rules[key]?.ignoreIfKey &&
+            stateToDiff[rules[key].ignoreIfKey]
+          ) {
+            continue;
+          }
           finalPatch[key] = stateToDiff[key];
         }
         needsFullStateOnNextDiffRef.current = false;
